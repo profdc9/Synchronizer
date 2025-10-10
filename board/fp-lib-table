@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "Synchronizer")(type "KiCad")(uri "${KIPRJMOD}/Synchronizer.pretty")(options "")(descr ""))
+)
