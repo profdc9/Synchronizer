@@ -20,16 +20,17 @@ mirror-axis=35.5    # set this to half of your board width
 zdrill=-2.5         # drilling depth
 drill-feed=200      # Vertical mm/min feed
 drill-speed=24000   # Spindle RPM
-onedrill=true       # Use a single drill for all holes
+#onedrill=true       # Use a single drill for all holes
 nog81=true          # replace G81 with G0+G1 (no G81 in GRBL)
+milldrill-diameter=1.0  # Use a 1.0 mm bit for drilling
 
 # Milling
-zwork=-0.1          # V-bit plunge depth
+zwork=-0.3          # V-bit plunge depth
 #mill-diameters=0.11 # 60 deg V-bit dia at -0.1 plunge depth
 #mill-diameters=0.08 # 45 deg V-bit dia at -0.1 plunge depth
-mill-diameters=0.05 # 30 deg V-bit dia at -0.1 plunge depth
+mill-diameters=1.0 # 30 deg V-bit dia at -0.1 plunge depth
 mill-speed=24000    # Spindle RPM
-mill-feed=600       # Horizontal feedrate in mm/min
+mill-feed=100       # Horizontal feedrate in mm/min
 mill-vertfeed=100   # Plunge rate in mm/min
 voronoi=true        # cuts the milling time significantly, but check with this on and off if everything looks ok
 preserve-thermal-reliefs = true # has effect only if voronoi=true
