@@ -1,0 +1,43 @@
+back=gerber/Synchronizer-B_Cu.gbr
+drill=gerber/Synchronizer-PTH.drl
+# outline=gerber/Synchronizer-Edge_Cuts.gbr
+
+# Generic
+metric=true         # use metric units for parameters
+metricoutput=true   # use metric units for output
+nog64=true          # do not set an explicit g64
+nom6=true           # do not emit m6
+zsafe=2             # The height in mm at which the bit can move freely without obstruction
+zchange=35          # Tool changing height in mm
+output-dir=gcode
+
+# Place a 5x7cm board in the lower right quadrant of the coordinate system
+# This will allow you to probe the fixed jaw of the vise for (0,0) on the CNC.
+
+mirror-axis=35.5    # set this to half of your board width
+
+# Drilling
+zdrill=-2.5         # drilling depth
+drill-feed=200      # Vertical mm/min feed
+drill-speed=24000   # Spindle RPM
+onedrill=true       # Use a single drill for all holes
+nog81=true          # replace G81 with G0+G1 (no G81 in GRBL)
+
+# Milling
+zwork=-0.1          # V-bit plunge depth
+#mill-diameters=0.11 # 60 deg V-bit dia at -0.1 plunge depth
+#mill-diameters=0.08 # 45 deg V-bit dia at -0.1 plunge depth
+mill-diameters=0.05 # 30 deg V-bit dia at -0.1 plunge depth
+mill-speed=24000    # Spindle RPM
+mill-feed=600       # Horizontal feedrate in mm/min
+mill-vertfeed=100   # Plunge rate in mm/min
+voronoi=true        # cuts the milling time significantly, but check with this on and off if everything looks ok
+preserve-thermal-reliefs = true # has effect only if voronoi=true
+
+# Cutting
+# zcut=-2.5
+# cutter-diameter=2
+# cut-feed=80
+# cut-infeed=100
+# cut-speed=24000
+# cut-side=back
