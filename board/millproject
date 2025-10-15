@@ -1,6 +1,6 @@
 back=gerber/Synchronizer-B_Cu.gbr
 drill=gerber/Synchronizer-PTH.drl
-# outline=gerber/Synchronizer-Edge_Cuts.gbr
+outline=gerber/Synchronizer-Edge_Cuts.gbr
 
 # Generic
 metric=true         # use metric units for parameters
@@ -14,13 +14,13 @@ output-dir=gcode
 # Place a 5x7cm board in the lower right quadrant of the coordinate system
 # This will allow you to probe the fixed jaw of the vise for (0,0) on the CNC.
 
-mirror-axis=35.5    # set this to half of your board width
+mirror-axis=0.0     # set this to half of your board width
 
 # Drilling
 zdrill=-2.5         # drilling depth
 drill-feed=200      # Vertical mm/min feed
 drill-speed=24000   # Spindle RPM
-#onedrill=true       # Use a single drill for all holes
+onedrill=true       # Use a single drill for all holes
 nog81=true          # replace G81 with G0+G1 (no G81 in GRBL)
 milldrill-diameter=1.0  # Use a 1.0 mm bit for drilling
 
@@ -36,9 +36,9 @@ voronoi=true        # cuts the milling time significantly, but check with this o
 preserve-thermal-reliefs = true # has effect only if voronoi=true
 
 # Cutting
-# zcut=-2.5
-# cutter-diameter=2
-# cut-feed=80
-# cut-infeed=100
-# cut-speed=24000
-# cut-side=back
+zcut=-0.5
+cutter-diameter=1.0
+cut-feed=80
+cut-infeed=100
+cut-speed=24000
+cut-side=back
