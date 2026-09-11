@@ -31,6 +31,8 @@
 #include "netclock.h"
 #include "control.h"
 #include "cli.h"
+#include "httpd.h"
+#include "webui.h"
 
 /* Slow heartbeat on the Pico W's onboard LED: one blink per detected swing
    while events are arriving, steady off when they are not. */
@@ -69,6 +71,7 @@ int main(void)
   sense_init();
   control_init();
   net_init();
+  web_init();
   cli_init();
 
   for (;;)
@@ -77,6 +80,12 @@ int main(void)
     control_poll();
     net_poll();
     led_task();
+
+    /* The listener can only be created once lwIP has an interface, and
+       long jobs queued by the browser run here rather than inside an
+       HTTP callback. */
+    if (!httpd_running() && net_status() == NET_ONLINE) httpd_init(80);
+    web_poll();
 
     /* threadsafe_background does the lwIP work in the background, but this
        keeps the driver serviced on builds that use polling instead. */

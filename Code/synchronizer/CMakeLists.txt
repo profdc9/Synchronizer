@@ -33,6 +33,9 @@ add_executable(synchronizer
     src/control.c
     src/netclock.c
     src/cli.c
+    src/httpd.c
+    src/webui.c
+    src/webpage.c
     src/tinycl.c
 )
 

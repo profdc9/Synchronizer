@@ -121,6 +121,12 @@ typedef struct _sense_resonance
 bool sense_find_resonance(uint32_t lo_hz, uint32_t hi_hz, bool plot,
                           sense_resonance *out);
 
+/* The points of the last scan's fine pass, and its result, so the web
+   interface can draw the curve instead of only quoting a number. */
+uint32_t sense_scan_count(void);
+bool     sense_scan_point(uint32_t i, uint32_t *hz, uint16_t *adc);
+const sense_resonance *sense_last_resonance(void);
+
 /* Capture the raw amplified tank waveform on ADC1 and print it. */
 void sense_capture(uint32_t rate_hz, uint32_t count);
 

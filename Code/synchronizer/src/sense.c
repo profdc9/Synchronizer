@@ -381,6 +381,19 @@ void sense_capture(uint32_t rate_hz, uint32_t count)
 
 static uint32_t scan_hz[SCAN_MAX];
 static uint16_t scan_adc[SCAN_MAX];
+static uint32_t scan_n;
+static sense_resonance last_res;
+
+uint32_t sense_scan_count(void) { return scan_n; }
+
+bool sense_scan_point(uint32_t i, uint32_t *hz, uint16_t *adc)
+{
+  if (i >= scan_n) return false;
+  *hz = scan_hz[i]; *adc = scan_adc[i];
+  return true;
+}
+
+const sense_resonance *sense_last_resonance(void) { return &last_res; }
 
 /* Park the drive at hz, let the envelope detector settle, and average. */
 static uint16_t measure_at(uint32_t hz, uint32_t dwell_ms)
@@ -406,6 +419,7 @@ static uint32_t run_scan(uint32_t lo, uint32_t hi, uint32_t steps,
     if (scan_adc[i] > scan_adc[best]) best = i;
   }
   *peak_idx = best;
+  scan_n = steps;
   return steps;
 }
 
@@ -457,6 +471,7 @@ bool sense_find_resonance(uint32_t lo, uint32_t hi, bool plot, sense_resonance *
   bool     was = running;
 
   memset(out, '\0', sizeof(*out));
+  scan_n = 0;
   if (hi <= lo || (hi - lo) < 100u) { printf("bad range\r\n"); return false; }
 
   running = false;              /* the detector must not run during a scan */
@@ -544,5 +559,6 @@ bool sense_find_resonance(uint32_t lo, uint32_t hi, bool plot, sense_resonance *
 
   baseline_q = 0;
   running    = was;
+  last_res   = *out;
   return out->valid && !out->saturated;
 }

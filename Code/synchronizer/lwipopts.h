@@ -11,17 +11,26 @@
 
 #define MEM_LIBC_MALLOC             0
 #define MEM_ALIGNMENT               4
-#define MEM_SIZE                    4000
-#define MEMP_NUM_TCP_SEG            16
+#define MEM_SIZE                    16000
+#define MEMP_NUM_TCP_SEG            32
 #define MEMP_NUM_ARP_QUEUE          10
-#define PBUF_POOL_SIZE              16
+#define PBUF_POOL_SIZE              24
+
+/* TCP, for the built-in web interface.  A handful of short-lived
+   connections serving a page of a few kilobytes - no more than that. */
+#define MEMP_NUM_TCP_PCB            8
+#define MEMP_NUM_TCP_PCB_LISTEN     2
+#define TCP_MSS                     1460
+#define TCP_SND_BUF                 (4 * TCP_MSS)
+#define TCP_WND                     (4 * TCP_MSS)
+#define TCP_SND_QUEUELEN            ((4 * TCP_SND_BUF) / TCP_MSS)
 
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1
 #define LWIP_ICMP                   1
 #define LWIP_RAW                    1
 #define LWIP_UDP                    1
-#define LWIP_TCP                    0
+#define LWIP_TCP                    1
 #define LWIP_DHCP                   1
 #define LWIP_DNS                    1
 #define LWIP_IPV4                   1
@@ -50,6 +59,7 @@
 #define API_LIB_DEBUG               LWIP_DBG_OFF
 #define IP_DEBUG                    LWIP_DBG_OFF
 #define UDP_DEBUG                   LWIP_DBG_OFF
+#define TCP_DEBUG                   LWIP_DBG_OFF
 #define DHCP_DEBUG                  LWIP_DBG_OFF
 #define DNS_DEBUG                   LWIP_DBG_OFF
 

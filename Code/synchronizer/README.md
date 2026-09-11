@@ -165,6 +165,32 @@ not one per swing.
 later than it currently thinks, and it will walk the hands there at the
 `SLEW` rate rather than jumping. Nobody touches the clock.
 
+## The web interface
+
+Once the board associates, it serves a page on port 80 at the address
+`STATUS` prints. Everything the serial console does is there: live status,
+the clock and coil geometry, the detector, the drive coil, the loop, and a
+resonance scan that draws its own curve.
+
+The serial CLI keeps working alongside it, and remains the only way to set
+Wi-Fi credentials — they are never served or accepted over the network.
+
+Two things shape the design:
+
+- **A resonance scan blocks for about three seconds**, which an HTTP handler
+  must not do. Requesting one only queues it; `web_poll()` runs it from the
+  main loop and the page watches the `job` field until it clears, then
+  fetches the curve. The same applies to writing flash.
+- **`http_dispatch()` runs in lwIP callback context**, so it never
+  allocates, never touches the ADC or flash, and never blocks. Each of the
+  three connection slots owns its own request and response buffers.
+
+**There is no authentication.** Anyone who can reach the device on your
+network can energise the drive coil. The pulse ceiling, the watchdog and the
+duty bucket in `drive.c` bound what that can do to the hardware, but they
+are not a security boundary — put this on a network you trust, or keep it to
+the serial console.
+
 ## Setting it up for a different clock
 
 Six commands cover everything clock-specific. Each one takes effect
