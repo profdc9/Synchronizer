@@ -31,6 +31,7 @@
 #include "netclock.h"
 #include "control.h"
 #include "cli.h"
+#include "hardware/watchdog.h"
 #include "httpd.h"
 #include "webui.h"
 
@@ -58,24 +59,38 @@ static void led_task(void)
   }
 }
 
+/* Every stage prints before it runs, so a hang names itself.  With the
+   watchdog rebooting after eight seconds, a stage that never returns shows
+   up as the same trail repeating - which is far easier to read than a board
+   that has simply gone quiet. */
+#define STEP(name) do { printf("[boot] " name "\r\n"); stdio_flush(); } while (0)
+
 int main(void)
 {
   stdio_init_all();
 
+  if (watchdog_caused_reboot())
+    printf("\r\n[boot] *** previous boot hung - watchdog reset ***\r\n");
+  printf("\r\n[boot] synchronizer starting\r\n");
+  stdio_flush();
+
+  watchdog_enable(8000, 1);
+
   /* Before anything else: the coil must be off and stay off.  Nothing
      downstream is allowed to assume a sane pin state. */
-  drive_init();
-
-  config_load();
-  tb_init(cfg.xtal_ppb);
-  sense_init();
-  control_init();
-  net_init();
-  web_init();
-  cli_init();
+  STEP("drive");    drive_init();
+  STEP("config");   config_load();
+  STEP("timebase"); tb_init(cfg.xtal_ppb);
+  STEP("sense");    sense_init();
+  STEP("control");  control_init();
+  STEP("net");      net_init();
+  STEP("web");      web_init();
+  STEP("cli");      cli_init();
+  printf("[boot] running\r\n");
 
   for (;;)
   {
+    watchdog_update();
     cli_poll();
     control_poll();
     net_poll();

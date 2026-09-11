@@ -497,17 +497,20 @@ static int net_cmd(int args, tinycl_parameter *tp, void *v)
 {
   struct netif *n;
   uint32_t a, b, d;
+  char ip[20], mask[20], gw[20];
 
   (void)args; (void)tp; (void)v;
 
   printf("\r\n-- interfaces ------------------------------------------\r\n");
   for (n = netif_list; n; n = n->next)
   {
+    /* ip4addr_ntoa returns a single static buffer, so three calls in one
+       printf all render the same address.  Copy each out first. */
+    ip4addr_ntoa_r(netif_ip4_addr(n), ip, sizeof(ip));
+    ip4addr_ntoa_r(netif_ip4_netmask(n), mask, sizeof(mask));
+    ip4addr_ntoa_r(netif_ip4_gw(n), gw, sizeof(gw));
     printf("  %c%c%u  %-15s mask %-15s gw %-15s %s%s%s%s\r\n",
-           n->name[0], n->name[1], n->num,
-           ip4addr_ntoa(netif_ip4_addr(n)),
-           ip4addr_ntoa(netif_ip4_netmask(n)),
-           ip4addr_ntoa(netif_ip4_gw(n)),
+           n->name[0], n->name[1], n->num, ip, mask, gw,
            netif_is_up(n)        ? "up "        : "DOWN ",
            netif_is_link_up(n)   ? "link "      : "nolink ",
            (n->flags & NETIF_FLAG_BROADCAST) ? "bcast " : "nobcast ",

@@ -257,14 +257,40 @@ static int scan_cb(void *env, const cyw43_ev_scan_result_t *r)
   return 0;
 }
 
+/* Scanning asks the radio to leave its channel, which it cannot do while it
+   is also being an access point.  Calling it there wedged the driver hard
+   enough to take the main loop with it: no console, no DHCP, nothing but an
+   SSID you could associate with.  So the list is gathered BEFORE the AP goes
+   up, while the interface is still a station, and a request to rescan while
+   the AP is up returns the cached list instead. */
 void net_scan_start(void)
 {
   cyw43_wifi_scan_options_t opts;
+
+  if (ap_up) return;
+
   memset(&opts, 0, sizeof(opts));
   scan_count = 0;
   cyw43_arch_lwip_begin();
   if (cyw43_wifi_scan(&cyw43_state, &opts, NULL, scan_cb) == 0) scan_running = true;
   cyw43_arch_lwip_end();
+}
+
+/* Collect a list before becoming an access point.  Bounded, because a scan
+   that never finishes must not stop the device from being set up. */
+static void scan_before_ap(void)
+{
+  absolute_time_t give_up;
+
+  if (ap_up) return;
+  net_scan_start();
+  give_up = make_timeout_time_ms(4000);
+  while (scan_running && absolute_time_diff_us(get_absolute_time(), give_up) > 0)
+  {
+    sleep_ms(100);
+    (void)net_scan_busy();
+  }
+  scan_running = false;
 }
 
 bool net_scan_busy(void)
@@ -303,6 +329,8 @@ static void ap_start(void)
 {
   if (ap_up) return;
 
+  scan_before_ap();      /* must happen while we are still a station */
+
   IP4_ADDR(&ap_ip,   192, 168, 4, 1);
   IP4_ADDR(&ap_mask, 255, 255, 255, 0);
 
@@ -319,7 +347,6 @@ static void ap_start(void)
   ap_up = true;
   state = NET_AP;
   mdns_up(CYW43_ITF_AP, &mdns_on_ap);
-  net_scan_start();          /* best effort; an empty list is fine */
 }
 
 static void ap_stop(void)

@@ -28,6 +28,7 @@
 #include "hardware/adc.h"
 #include "hardware/dma.h"
 #include "hardware/clocks.h"
+#include "hardware/watchdog.h"
 #include "board.h"
 #include "config.h"
 #include "sense.h"
@@ -303,6 +304,7 @@ void sense_sweep(uint32_t from_hz, uint32_t to_hz, uint32_t step_hz, uint32_t dw
   for (f = from_hz; f <= to_hz; f += step_hz)
   {
     uint32_t acc = 0, i;
+    watchdog_update();          /* a wide sweep outruns the eight seconds */
     tank_apply(f);
     sleep_ms(dwell_ms);
     adc_select_input(ADC_CH_AMPLITUDE);
@@ -399,6 +401,7 @@ const sense_resonance *sense_last_resonance(void) { return &last_res; }
 static uint16_t measure_at(uint32_t hz, uint32_t dwell_ms)
 {
   uint32_t acc = 0, i;
+  watchdog_update();
   tank_apply(hz);
   sleep_ms(dwell_ms);
   adc_select_input(ADC_CH_AMPLITUDE);

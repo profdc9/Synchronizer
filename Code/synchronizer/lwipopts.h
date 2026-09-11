@@ -33,7 +33,17 @@
 #define LWIP_RAND()                 ((u32_t)rand())
 #define LWIP_IGMP                   1
 #define LWIP_NUM_NETIF_CLIENT_DATA  2
-#define MEMP_NUM_SYS_TIMEOUT        (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 1)
+/* lwIP sizes this pool from a formula that does not count mDNS at all, and
+   mdns.c only asks for "one more".  One is not enough here: the responder
+   runs on two interfaces - the station and the setup access point - and its
+   probe and announce sequence schedules several timeouts of its own.  Too
+   small and lwIP does not degrade, it panics:
+
+     *** PANIC *** sys_timeout: timeout != NULL, pool MEMP_SYS_TIMEOUT is empty
+
+   which halts the firmware outright - no console, no DHCP, just an SSID you
+   can associate with.  Eight costs about 128 bytes. */
+#define MEMP_NUM_SYS_TIMEOUT        (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 8)
 #define LWIP_MDNS_RESPONDER         1
 #define MDNS_MAX_SERVICES           1
 
