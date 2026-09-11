@@ -37,3 +37,6 @@ _autosave-*
 
 # KiCad regenerates this from the footprint libraries on demand
 board/fp-info-cache
+
+# Kept locally as a reference for the rewrite; not part of the project
+Code/old-project/
