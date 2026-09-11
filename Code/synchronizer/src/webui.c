@@ -94,7 +94,7 @@ void web_poll(void)
   {
     cli_run_captured(cli_cmd, cli_out, sizeof(cli_out), &cli_out_len);
     cli_serial++;
-    snprintf(job_msg, sizeof(job_msg), "ran \"%s\"", cli_cmd);
+    snprintf(job_msg, sizeof(job_msg), "ran %s", cli_cmd);
   }
 
   job = JOB_NONE;
@@ -102,16 +102,43 @@ void web_poll(void)
 
 /* --- JSON ------------------------------------------------------------- */
 
+/* Escape a string for use inside JSON quotes.  Everything that reaches the
+   status object this way is arbitrary text - a job message quoting the
+   command it ran, an SSID someone else chose, a hostname - and a single
+   quote or backslash in any of them produces a document the page cannot
+   parse, which breaks the whole interface rather than one field.
+   Control characters and non-ASCII are dropped rather than \u-escaped;
+   this is a status page, not a transport. */
+static void json_esc(char *out, uint32_t outsz, const char *s)
+{
+  uint32_t u = 0;
+  if (outsz == 0u) return;
+  while (*s && u + 3u < outsz)
+  {
+    unsigned char ch = (unsigned char)*s++;
+    if (ch == '"' || ch == '\\') { out[u++] = '\\'; out[u++] = (char)ch; }
+    else if (ch >= 0x20u && ch < 0x7Fu) out[u++] = (char)ch;
+  }
+  out[u] = '\0';
+}
+
 static uint32_t json_status(char *b, uint32_t n)
 {
   control_stats cs;
   const sense_resonance *r = sense_last_resonance();
   uint64_t mean = sense_mean_interval_us(64);
+  char e_job[sizeof(job_msg) * 2], e_ssid[CONFIG_SSID_LEN * 2];
+  char e_ap[70], e_host[CONFIG_NAME_LEN * 2], e_ntp[CONFIG_HOST_LEN * 2];
   int64_t  nom  = (int64_t)cfg_event_interval_ns();
   int64_t  ppb  = 0, sday = 0;
   uint32_t u = 0;
 
   control_stats_get(&cs);
+  json_esc(e_job,  sizeof(e_job),  job_msg);
+  json_esc(e_ssid, sizeof(e_ssid), cfg.ssid);
+  json_esc(e_ap,   sizeof(e_ap),   net_ap_ssid());
+  json_esc(e_host, sizeof(e_host), net_hostname());
+  json_esc(e_ntp,  sizeof(e_ntp),  cfg.ntp_host);
   if (mean) { int64_t got = (int64_t)mean * 1000ll;
               ppb = ((got - nom) * 1000000000ll) / nom;
               sday = ((got - nom) * -86400ll) / nom; }
@@ -121,7 +148,7 @@ static uint32_t json_status(char *b, uint32_t n)
     "\"clock\":{\"bph\":%lu,\"bps\":%u,\"epp\":%u,\"ppt\":%u,"
       "\"period_ns\":%llu,\"interval_ns\":%llu,"
       "\"mean_us\":%llu,\"ppb\":%lld,\"sday\":%lld},",
-    web_job_name(), job_msg,
+    web_job_name(), e_job,
     (unsigned long)cfg.beats_per_hour, cfg.beats_per_period,
     cfg.events_per_period, cfg.drive_offset_ppt,
     (unsigned long long)cfg_period_ns(), (unsigned long long)cfg_event_interval_ns(),
@@ -183,8 +210,8 @@ static uint32_t json_status(char *b, uint32_t n)
     r->valid ? 1 : 0, r->saturated ? 1 : 0, (unsigned long)r->f0_hz,
     (unsigned long)r->f_lo_hz, (unsigned long)r->f_hi_hz,
     (unsigned long)r->q_x10, r->peak_adc, r->floor_adc,
-    cfg.ssid, cfg.ntp_host, net_in_ap() ? 1 : 0, net_ap_ssid(),
-    net_hostname(), net_mdns_active() ? 1 : 0, (unsigned long)cli_serial);
+    e_ssid, e_ntp, net_in_ap() ? 1 : 0, e_ap,
+    e_host, net_mdns_active() ? 1 : 0, (unsigned long)cli_serial);
 
   return (u < n) ? u : (n - 1u);
 }
@@ -198,17 +225,10 @@ static uint32_t json_wifi(char *b, uint32_t n)
                           net_scan_busy() ? "true" : "false", (unsigned long)cnt);
   for (i = 0; i < cnt && u < n - 64u; i++)
   {
+    char esc[70];
     net_scan_get(i, &ss, &rssi);
-    /* SSIDs are arbitrary bytes; emit only what is safe inside a JSON
-       string and drop the rest rather than producing invalid JSON. */
-    u += (uint32_t)snprintf(b + u, n - u, "%s\"", i ? "," : "");
-    while (*ss && u < n - 8u)
-    {
-      unsigned char ch = (unsigned char)*ss++;
-      if (ch == '"' || ch == '\\') b[u++] = '\\', b[u++] = (char)ch;
-      else if (ch >= 0x20u && ch < 0x7Fu) b[u++] = (char)ch;
-    }
-    u += (uint32_t)snprintf(b + u, n - u, "\"");
+    json_esc(esc, sizeof(esc), ss);      /* SSIDs are arbitrary bytes */
+    u += (uint32_t)snprintf(b + u, n - u, "%s\"%s\"", i ? "," : "", esc);
   }
   u += (uint32_t)snprintf(b + u, n - u, "],\"rssi\":[");
   for (i = 0; i < cnt && u < n - 16u; i++)
@@ -352,7 +372,7 @@ void http_dispatch(const char *method, const char *path, const char *query,
       }
     }
 
-    snprintf(job_msg, sizeof(job_msg), "running \"%s\"", cli_cmd);
+    snprintf(job_msg, sizeof(job_msg), "running %s", cli_cmd);
     job = JOB_CLI;
     reply_lit(out, 202, "text/plain",
             "queued\r\n");

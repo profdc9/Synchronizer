@@ -67,6 +67,7 @@ static char         ipbuf[20];
 static bool         force_sync;
 
 static uint32_t     sta_fails;
+static absolute_time_t connect_deadline;
 static bool         ap_up, ap_forced;
 
 /* Requests that arrive from an HTTP handler cannot be carried out there.
@@ -154,6 +155,23 @@ static void ntp_send(void)
 
   waiting = true;
   wait_deadline = make_timeout_time_ms(NTP_TIMEOUT_MS);
+}
+
+/* The driver defaults to CYW43_PERFORMANCE_PM, which is PM2 power save with
+   a 200 ms sleep timer.  It leaves the board associated and holding a DHCP
+   lease while quietly dropping unicast traffic: ARP goes unanswered, so
+   nothing on the network can reach it even though it looks connected, and
+   mDNS answers come and go with the beacon interval.
+
+   This device is powered from the wall and wants both a responsive web
+   interface and low-jitter NTP, so there is nothing to save power for.
+   The driver reapplies its default whenever the first interface comes up,
+   so this has to be reasserted rather than set once. */
+static void power_save_off(void)
+{
+  cyw43_arch_lwip_begin();
+  cyw43_wifi_pm(&cyw43_state, CYW43_NONE_PM);
+  cyw43_arch_lwip_end();
 }
 
 /* --- mDNS / DNS-SD ------------------------------------------------------ */
@@ -344,6 +362,7 @@ static void ap_start(void)
   dhcpserver_start(&cyw43_state.netif[CYW43_ITF_AP], &ap_ip, &ap_mask);
   dnsserver_start(&cyw43_state.netif[CYW43_ITF_AP], &ap_ip);
 
+  power_save_off();
   ap_up = true;
   state = NET_AP;
   mdns_up(CYW43_ITF_AP, &mdns_on_ap);
@@ -426,6 +445,7 @@ void net_init(void)
     return;
   }
   cyw43_arch_enable_sta_mode();
+  power_save_off();
 
   cyw43_arch_lwip_begin();
   pcb = udp_new_ip_type(IPADDR_TYPE_ANY);
@@ -472,22 +492,44 @@ void net_poll(void)
   if (state == NET_OFF)
   {
     if (absolute_time_diff_us(get_absolute_time(), retry_at) > 0) return;
-    state = NET_CONNECTING;
-    if (cyw43_arch_wifi_connect_timeout_ms(cfg.ssid, cfg.pass,
-                                           CYW43_AUTH_WPA2_AES_PSK,
-                                           CONNECT_TIMEOUT_MS))
+
+    /* Asynchronous on purpose.  The blocking form parks the main loop for
+       up to twenty seconds, which stops the console, the web server and the
+       discipline loop dead - and outlives the watchdog, so joining a network
+       rebooted the board instead of joining it. */
+    if (cyw43_arch_wifi_connect_async(cfg.ssid, cfg.pass, CYW43_AUTH_WPA2_AES_PSK))
     {
-      state = NET_OFF;
-      /* Credentials that never work would otherwise retry forever with no
-         way for anyone to correct them. */
       if (++sta_fails >= STA_FAILS_TO_AP) { ap_start(); return; }
-      retry_at = make_timeout_time_ms(15000);
+      retry_at = make_timeout_time_ms(5000);
       return;
     }
-    sta_fails = 0;
-    state     = NET_ONLINE;
-    next_poll = get_absolute_time();
-    mdns_up(CYW43_ITF_STA, &mdns_on_sta);
+    state            = NET_CONNECTING;
+    connect_deadline = make_timeout_time_ms(CONNECT_TIMEOUT_MS);
+    return;
+  }
+
+  if (state == NET_CONNECTING)
+  {
+    int link = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+
+    if (link == CYW43_LINK_UP)
+    {
+      sta_fails = 0;
+      state     = NET_ONLINE;
+      next_poll = get_absolute_time();
+      power_save_off();
+      mdns_up(CYW43_ITF_STA, &mdns_on_sta);
+      return;
+    }
+
+    /* A negative status is a definite refusal - wrong key, no such network -
+       so there is no point waiting out the timeout for it. */
+    if (link < 0 || absolute_time_diff_us(get_absolute_time(), connect_deadline) <= 0)
+    {
+      state = NET_OFF;
+      if (++sta_fails >= STA_FAILS_TO_AP) { ap_start(); return; }
+      retry_at = make_timeout_time_ms(5000);
+    }
     return;
   }
 
