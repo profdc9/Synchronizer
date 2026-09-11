@@ -31,25 +31,23 @@
 #include "timebase.h"
 #include "control.h"
 
-/* How many clean, correctly spaced swings before we call it locked. */
-#define ACQUIRE_SWINGS      12u
-
-/* An event this far from where it was expected is not the swing we think
-   it is; give up and re-acquire rather than lock onto nonsense. */
-#define MAX_SLIP_SWINGS     10ll
-
-/* A swing this far off nominal is not a pendulum swing at all. */
-#define ACQUIRE_TOL_PPM     40000ll     /* +/- 4 % */
+/* An event this far from where it was expected is not the one we think it
+   is; give up and re-acquire rather than lock onto nonsense. */
+#define MAX_SLIP_EVENTS     10ll
 
 static control_state st = CTRL_IDLE;
 
-static uint64_t swing_whole_ns;         /* 7200e9 / bph, integer part     */
-static uint32_t swing_rem;              /* and remainder, over bph        */
-static uint32_t bph;
+/* The schedule is kept in EVENTS, not swings: a sense coil at the centre
+   of the swing reports twice per period, one at an extreme reports once,
+   and the loop should not care which.  cfg_event_ratio gives the interval
+   as an exact rational so the accumulator never drifts. */
+static uint64_t ev_whole_ns;            /* num / den, integer part        */
+static uint64_t ev_rem;                 /* and remainder, over den        */
+static uint64_t ev_den;
 
-static uint64_t exp_ns;                 /* expected UTC of the next swing */
-static uint32_t exp_frac;
-static uint64_t swings;
+static uint64_t exp_ns;                 /* expected UTC of the next event */
+static uint64_t exp_frac;
+static uint64_t events;
 static uint32_t missed;
 
 static int64_t  integ;
@@ -74,27 +72,29 @@ static bool ev_echo;
 void control_set_echo(bool on) { ev_echo = on; }
 bool control_echo(void) { return ev_echo; }
 
-static uint64_t swing_ns_nominal(void)
+static uint64_t event_ns_nominal(void)
 {
-  return 7200000000000ull / (uint64_t)bph;
+  return cfg_event_interval_ns();
 }
 
 static void exp_advance(int64_t k)
 {
   if (k <= 0) return;
-  exp_ns   += (uint64_t)k * swing_whole_ns;
+  exp_ns += (uint64_t)k * ev_whole_ns;
   {
-    uint64_t r = (uint64_t)exp_frac + (uint64_t)k * (uint64_t)swing_rem;
-    exp_ns   += r / bph;
-    exp_frac  = (uint32_t)(r % bph);
+    uint64_t r = exp_frac + (uint64_t)k * ev_rem;
+    exp_ns  += r / ev_den;
+    exp_frac = r % ev_den;
   }
 }
 
 static void recompute_constants(void)
 {
-  bph = cfg.beats_per_hour ? cfg.beats_per_hour : DEFAULT_BEATS_PER_HOUR;
-  swing_whole_ns = 7200000000000ull / (uint64_t)bph;
-  swing_rem      = (uint32_t)(7200000000000ull % (uint64_t)bph);
+  uint64_t num;
+  cfg_event_ratio(&num, &ev_den);
+  if (ev_den == 0ull) ev_den = 1ull;
+  ev_whole_ns = num / ev_den;
+  ev_rem      = num % ev_den;
 }
 
 void control_init(void)
@@ -106,7 +106,7 @@ void control_init(void)
 
 void control_reset(void)
 {
-  exp_ns = 0; exp_frac = 0; swings = 0; missed = 0;
+  exp_ns = 0; exp_frac = 0; events = 0; missed = 0;
   integ = 0; cmd_ns = 0; credit_ns = 0;
   last_err = 0; filt_err = 0; drift_ppb = 0;
   acq_run = 0; acq_prev_utc = 0;
@@ -144,22 +144,34 @@ bool control_measure_authority(uint32_t n, bool retard)
   meas_total  = n;
   meas_retard = retard;
   meas_err0   = last_err;
-  meas_drift0 = (drift_ppb * (int64_t)swing_ns_nominal()) / 1000000000ll;
+  meas_drift0 = (drift_ppb * (int64_t)event_ns_nominal()) / 1000000000ll;
   meas_fired  = 0;
   st = CTRL_MEASURE;
-  printf("measuring %s authority over %lu swings\r\n",
+  printf("measuring %s authority over %lu events\r\n",
          retard ? "retard" : "advance", (unsigned long)n);
   return true;
 }
 
-/* Put one pulse where it belongs relative to this swing's detection.  The
-   drive coil is at the far extreme, half a period after the sense coil. */
+/* Put one pulse where it belongs relative to this event.  How long after a
+   sense event the bob reaches the DRIVE coil depends entirely on where the
+   two coils were placed, so it is configuration: parts per thousand of a
+   full period.  Opposite extremes is 500, the same extreme is 0, sense at
+   the centre with drive at an extreme is 250. */
 static void fire_for(const sense_event *ev, bool retard)
 {
-  uint64_t half_us = swing_ns_nominal() / 2000ull;
-  uint64_t arrive  = ev->t_us + half_us;
-  uint64_t when    = retard ? (arrive + cfg.pulse_retard_us)
-                            : (arrive - cfg.pulse_advance_us);
+  uint64_t period_us = cfg_period_ns() / 1000ull;
+  uint64_t offset_us = (period_us * (uint64_t)cfg.drive_offset_ppt) / 1000ull;
+  uint64_t arrive    = ev->t_us + offset_us;
+  uint64_t when;
+
+  if (retard) when = arrive + cfg.pulse_retard_us;
+  else
+  {
+    /* An advance pulse leads the arrival, and with the coils at the same
+       place that would be in the past - wait for the next period. */
+    while (arrive < ev->t_us + cfg.pulse_advance_us) arrive += period_us;
+    when = arrive - cfg.pulse_advance_us;
+  }
   drive_pulse_at(when, cfg.pulse_us);
 }
 
@@ -169,15 +181,16 @@ static void track_event(const sense_event *ev)
 
   d = (int64_t)ev->utc_ns - (int64_t)exp_ns;
   {
-    int64_t sw = (int64_t)swing_ns_nominal();
-    k = (d >= 0) ? ((d + sw / 2) / sw) : ((d - sw / 2) / sw);
+    int64_t iv = (int64_t)event_ns_nominal();
+    k = (d >= 0) ? ((d + iv / 2) / iv) : ((d - iv / 2) / iv);
   }
 
-  if (k > MAX_SLIP_SWINGS || k < 0)
+  if (k > MAX_SLIP_EVENTS || k < 0)
   {
     /* Either the detector is producing nonsense or we have drifted more
-       than half a swing from where we thought we were.  Either way this is
-       not the swing we indexed, and the schedule only moves forward. */
+       than half an interval from where we thought we were.  Either way
+       this is not the event we indexed, and the schedule only moves
+       forward. */
     st = CTRL_HOLD;
     return;
   }
@@ -186,7 +199,7 @@ static void track_event(const sense_event *ev)
   err = (int64_t)ev->utc_ns - (int64_t)exp_ns - target_off;
   last_err = err;
   filt_err += (err - filt_err) / 8;
-  swings++;
+  events++;
   exp_advance(1);
 
   /* A running estimate of how far the pendulum itself is off nominal,
@@ -195,7 +208,7 @@ static void track_event(const sense_event *ev)
     uint64_t mean_us = sense_mean_interval_us(64);
     if (mean_us)
     {
-      int64_t nom = (int64_t)swing_ns_nominal();
+      int64_t nom = (int64_t)event_ns_nominal();
       int64_t got = (int64_t)mean_us * 1000ll;
       drift_ppb = ((got - nom) * 1000000000ll) / nom;
     }
@@ -227,7 +240,7 @@ static void track_event(const sense_event *ev)
   }
 
   /* --- PI on phase ---------------------------------------------------- */
-  limit = ((int64_t)cfg.slew_limit_ppm * (int64_t)swing_ns_nominal()) / 1000000ll;
+  limit = ((int64_t)cfg.slew_limit_ppm * (int64_t)event_ns_nominal()) / 1000000ll;
   if (limit < 0) limit = -limit;
 
   {
@@ -262,24 +275,25 @@ static void track_event(const sense_event *ev)
 
 static void acquire_event(const sense_event *ev)
 {
-  int64_t nom = (int64_t)swing_ns_nominal();
+  int64_t  nom  = (int64_t)event_ns_nominal();
+  uint32_t need = cfg.acquire_events ? cfg.acquire_events : 12u;
 
   if (acq_prev_utc != 0ull)
   {
     int64_t gap = (int64_t)ev->utc_ns - (int64_t)acq_prev_utc;
-    int64_t tol = (nom * ACQUIRE_TOL_PPM) / 1000000ll;
+    int64_t tol = (nom * (int64_t)(cfg.acquire_tol_pct ? cfg.acquire_tol_pct : 4u)) / 100ll;
     if (gap > nom - tol && gap < nom + tol) acq_run++;
     else acq_run = 0;
   }
   acq_prev_utc = ev->utc_ns;
 
-  if (acq_run >= ACQUIRE_SWINGS)
+  if (acq_run >= need)
   {
     /* Anchor the schedule on this event, so the loop starts at zero error
        and only has to hold it there. */
     exp_ns   = ev->utc_ns;
     exp_frac = 0;
-    swings   = 0;
+    events   = 0;
     missed   = 0;
     integ    = 0;
     cmd_ns   = 0;
@@ -322,7 +336,7 @@ void control_poll(void)
   if ((st == CTRL_TRACK || st == CTRL_MEASURE) && sense_last_event_us() != 0ull)
   {
     uint64_t quiet = time_us_64() - sense_last_event_us();
-    if (quiet > (swing_ns_nominal() / 1000ull) * 5ull)
+    if (quiet > (event_ns_nominal() / 1000ull) * 5ull)
     {
       st = CTRL_HOLD;
       drive_all_off();
@@ -334,7 +348,7 @@ void control_stats_get(control_stats *o)
 {
   memset(o, '\0', sizeof(*o));
   o->state            = st;
-  o->swings           = swings;
+  o->events           = events;
   o->err_ns           = last_err;
   o->filt_err_ns      = filt_err;
   o->cmd_ns_per_swing = cmd_ns;

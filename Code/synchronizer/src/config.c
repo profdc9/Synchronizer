@@ -57,7 +57,14 @@ void config_defaults(void)
   cfg.magic   = CONFIG_MAGIC;
   cfg.version = CONFIG_VERSION;
 
-  cfg.beats_per_hour = DEFAULT_BEATS_PER_HOUR;
+  /* These describe the clock this firmware was developed against: a
+     31-day movement at 8400 bph with both coils at opposite extremes of
+     the swing.  They are only a starting point - every one of them is
+     meant to be changed for a different clock and saved. */
+  cfg.beats_per_hour    = DEFAULT_BEATS_PER_HOUR;
+  cfg.beats_per_period  = DEFAULT_BEATS_PER_PERIOD;
+  cfg.events_per_period = 1u;     /* sense coil at an extreme            */
+  cfg.drive_offset_ppt  = 500u;   /* drive coil at the other extreme     */
 
   /* The tank frequency is a property of the coil you wind and of C3 || C4,
      so there is no meaningful default - "sweep" finds it and "save" keeps
@@ -70,6 +77,16 @@ void config_defaults(void)
   cfg.detect_threshold = 200u;
   cfg.detect_falling   = 1u;     /* detuning the tank lowers its impedance */
   cfg.sense_enabled    = 1u;
+  cfg.sample_hz        = 1000u;
+
+  /* Percentages of the expected interval between sense events.  On the
+     development clock that interval is 857 ms, so these come out as
+     300 ms, 17 ms and 514 ms. */
+  cfg.rearm_pct        = 35u;
+  cfg.min_event_pct    = 2u;
+  cfg.max_event_pct    = 60u;
+  cfg.acquire_tol_pct  = 4u;
+  cfg.acquire_events   = 12u;
 
   /* Deliberately timid.  The coil current runs through R6 (10R) and the
      coil resistance is unknown until it is measured, so the first pulses
@@ -87,6 +104,36 @@ void config_defaults(void)
   strncpy(cfg.ntp_host, "pool.ntp.org", CONFIG_HOST_LEN - 1);
   cfg.tz_offset_s = 0;
   cfg.xtal_ppb    = 0;
+}
+
+/* --- derived quantities ------------------------------------------------
+
+   One full swing takes beats_per_period / beats_per_hour of an hour, and
+   the sense coil reports events_per_period times within it.  Both are
+   returned as an exact rational so the control loop's schedule can be
+   accumulated in integers and never drift. */
+
+void cfg_event_ratio(uint64_t *num, uint64_t *den)
+{
+  uint64_t bpp = cfg.beats_per_period  ? cfg.beats_per_period  : DEFAULT_BEATS_PER_PERIOD;
+  uint64_t epp = cfg.events_per_period ? cfg.events_per_period : 1u;
+  uint64_t bph = cfg.beats_per_hour    ? cfg.beats_per_hour    : DEFAULT_BEATS_PER_HOUR;
+
+  *num = 3600000000000ull * bpp;
+  *den = bph * epp;
+}
+
+uint64_t cfg_event_interval_ns(void)
+{
+  uint64_t num, den;
+  cfg_event_ratio(&num, &den);
+  return num / den;
+}
+
+uint64_t cfg_period_ns(void)
+{
+  uint64_t epp = cfg.events_per_period ? cfg.events_per_period : 1u;
+  return cfg_event_interval_ns() * epp;
 }
 
 void config_load(void)

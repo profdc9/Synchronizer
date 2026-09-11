@@ -33,10 +33,15 @@ extern "C" {
 /* What the loop is actually locking
    ---------------------------------
    The clock keeps correct time when each full swing takes exactly
-   BEATS_PER_SWING/beats_per_hour of an hour of real time - 6/7 s for this
-   movement.  So swing number n should arrive at
+   beats_per_period / beats_per_hour of an hour of real time.  The sense
+   coil reports events_per_period times within that swing, so event number
+   n should arrive at
 
-       expected(n) = epoch + n * 7200e9 / bph   nanoseconds of UTC
+       expected(n) = epoch + n * 3600e9 * beats_per_period
+                             / (beats_per_hour * events_per_period)
+
+   nanoseconds of UTC.  All three of those come from the configuration -
+   nothing here assumes a particular movement or coil placement.
 
    and the phase error is simply actual - expected.  Negative means the bob
    arrived early, the pendulum is running fast, and the hands are gaining.
@@ -44,9 +49,9 @@ extern "C" {
    How it corrects
    ---------------
    A PI controller on that error asks for a number of nanoseconds to be
-   added to each swing.  That number is tiny - cancelling 11 s/day needs
-   113 microseconds of retard per swing - far too small to deliver as a pulse
-   every swing.  So the demand is accumulated in a credit and spent whole:
+   added to each swing.  That number is tiny - on the development clock,
+   cancelling 11 s/day needs 113 microseconds of retard per swing - far too
+   small to deliver as a pulse every swing.  So the demand is accumulated in a credit and spent whole:
    when the credit reaches the measured phase authority of one pulse, one
    pulse is fired and the credit is reduced by what it bought.  That makes
    the actuator a first-order sigma-delta, which is exactly the right shape
@@ -54,10 +59,11 @@ extern "C" {
 
    Where the pulse goes
    --------------------
-   The drive coil sits at the opposite extreme of the swing from the sense
-   coil, so the bob reaches it half a period after each detected event.
-   Pulling it in before it gets there advances the swing; pulling back on it
-   after it has turned retards the swing. */
+   How long after a sense event the bob reaches the drive coil depends on
+   where the two coils were placed, so it is configuration rather than an
+   assumption: cfg.drive_offset_ppt, in parts per thousand of a full
+   period.  Pulling the bob in before it arrives advances the swing;
+   pulling back on it after it has turned retards the swing. */
 
 typedef enum
 {
@@ -71,14 +77,14 @@ typedef enum
 typedef struct _control_stats
 {
   control_state state;
-  uint64_t swings;            /* swings counted since lock               */
+  uint64_t events;            /* sense events counted since lock         */
   int64_t  err_ns;            /* latest phase error                      */
   int64_t  filt_err_ns;       /* smoothed, for display                   */
   int64_t  cmd_ns_per_swing;  /* current controller output               */
   int64_t  credit_ns;         /* undelivered correction                  */
   int64_t  drift_ppb;         /* measured pendulum error vs nominal      */
   uint32_t pulses;
-  uint32_t missed;            /* swings the detector did not report      */
+  uint32_t missed;            /* events the detector did not report      */
   int64_t  target_offset_ns;  /* deliberate offset of the hands          */
 } control_stats;
 
@@ -93,7 +99,7 @@ void control_reset(void);
    everything else, so a large offset slews rather than jumps. */
 void control_set_offset_ns(int64_t offset_ns);
 
-/* Fire one pulse per swing for n swings and report the phase step, which
+/* Fire one pulse per event for n events and report the phase step, which
    is the loop gain.  Run this with the loop switched off. */
 bool control_measure_authority(uint32_t swings, bool retard);
 

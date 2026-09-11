@@ -45,7 +45,7 @@ extern "C" {
    two flanks are steep and symmetric about the turning point. */
 
 #define SENSE_RING        32
-#define SENSE_SAMPLE_HZ   1000u
+#define SENSE_SAMPLE_HZ   1000u      /* default only; cfg.sample_hz wins */
 
 typedef struct _sense_event
 {
@@ -58,6 +58,15 @@ typedef struct _sense_event
 } sense_event;
 
 void sense_init(void);
+
+/* Recompute the detector's timing windows from the configuration.  They
+   are percentages of the expected interval between sense events, so they
+   follow the pendulum rather than assuming a fast one.  Call this after
+   anything that changes the clock's geometry or rate. */
+void sense_refresh_timing(void);
+uint32_t sense_rearm_us(void);
+uint32_t sense_min_event_us(void);
+uint32_t sense_max_event_us(void);
 void sense_set_tank_hz(uint32_t hz);
 uint32_t sense_tank_hz(void);
 void sense_enable(bool on);

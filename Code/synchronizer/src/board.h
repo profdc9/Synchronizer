@@ -67,16 +67,23 @@ extern "C" {
 #define GPIO_GPS_RX         13
 #define GPS_UART            uart0
 
-/* --- the clock itself ------------------------------------------------- */
+/* --- the clock ---------------------------------------------------------
 
-/* Measured from a three-minute recording on 2026-09-10: the escapement
-   pattern repeats every 0.857030 s, which is 8400 beats per hour within the
-   measurement error.  Two beats per full swing, so the sense coil - which
-   sits at one extreme of the swing - sees the bob once per full period.
+   DEFAULTS ONLY.  Nothing in this firmware may assume a particular
+   movement: pendulum period, escapement, bob material and coil placement
+   all vary from clock to clock, and every one of them is configurable and
+   stored in flash.  These values seed a fresh configuration and describe
+   the clock the firmware was developed against, nothing more.
 
-   8400 bph = 4200 full swings/hour = 100800 swings/day. */
+   That clock: measured from a three-minute recording of the escapement on
+   2026-09-10, the pattern repeats every 0.857030 s, which is 8400 beats
+   per hour within the measurement error - 4200 full swings/hour,
+   100800/day.
+
+   beats_per_period is 2 for an anchor, deadbeat or pin-pallet escapement:
+   two pallets, one tooth released per half period. */
 #define DEFAULT_BEATS_PER_HOUR   8400u
-#define BEATS_PER_SWING          2u
+#define DEFAULT_BEATS_PER_PERIOD 2u
 
 #ifdef __cplusplus
 }

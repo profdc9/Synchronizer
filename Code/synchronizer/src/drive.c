@@ -135,7 +135,13 @@ bool drive_pulse_at(uint64_t when_us, uint32_t width_us)
 
   if (width_us == 0u || width_us > DRIVE_MAX_PULSE_US) { refused++; return false; }
   if (dt < 0) { refused++; return false; }
-  if (dt > 2000000ll) { refused++; return false; }    /* more than two swings out */
+  /* Was a flat 2 s "two swings", which is less than ONE swing on a
+     seconds pendulum.  Follow the configured period instead. */
+  {
+    int64_t horizon = (int64_t)(cfg_period_ns() / 1000ull) * 2ll;
+    if (horizon < 100000ll) horizon = 100000ll;
+    if (dt > horizon) { refused++; return false; }
+  }
 
   if (on_alarm > 0) { cancel_alarm(on_alarm); on_alarm = -1; }
   if (dt < 200ll) return start_pulse(width_us);

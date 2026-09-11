@@ -52,23 +52,30 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   control_stats_get(&cs);
 
   printf("\r\n-- clock ------------------------------------------------\r\n");
-  printf("%-22s %lu bph, %lu swings/hour\r\n", "gear ratio",
-         (unsigned long)cfg.beats_per_hour,
-         (unsigned long)(cfg.beats_per_hour / BEATS_PER_SWING));
-  printf("%-22s %llu ns\r\n", "nominal swing",
-         (unsigned long long)(7200000000000ull / cfg.beats_per_hour));
+  printf("%-22s %lu bph, %u beats per swing\r\n", "gear ratio",
+         (unsigned long)cfg.beats_per_hour, cfg.beats_per_period);
+  printf("%-22s %llu ns  (%lu swings/hour)\r\n", "nominal swing",
+         (unsigned long long)cfg_period_ns(),
+         (unsigned long)(cfg.beats_per_hour / (cfg.beats_per_period ? cfg.beats_per_period : 2u)));
+  printf("%-22s %u per swing, every %llu ns\r\n", "sense events",
+         cfg.events_per_period, (unsigned long long)cfg_event_interval_ns());
+  printf("%-22s %u ppt of a period after a sense event\r\n", "drive coil",
+         cfg.drive_offset_ppt);
+  printf("%-22s rearm %lu us, bump %lu..%lu us\r\n", "detector windows",
+         (unsigned long)sense_rearm_us(), (unsigned long)sense_min_event_us(),
+         (unsigned long)sense_max_event_us());
   mean = sense_mean_interval_us(64);
   if (mean)
   {
-    int64_t nom = (int64_t)(7200000000000ull / cfg.beats_per_hour);
+    int64_t nom = (int64_t)cfg_event_interval_ns();
     int64_t got = (int64_t)mean * 1000ll;
-    printf("%-22s %llu us  (%+lld ppb, %+lld s/day)\r\n", "measured swing",
+    printf("%-22s %llu us  (%+lld ppb, %+lld s/day)\r\n", "measured interval",
            (unsigned long long)mean,
            (long long)(((got - nom) * 1000000000ll) / nom),
            (long long)(((got - nom) * -86400ll) / nom));
   }
   else
-    printf("%-22s (no events yet)\r\n", "measured swing");
+    printf("%-22s (no events yet)\r\n", "measured interval");
 
   printf("\r\n-- sense ------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "state", sense_enabled() ? "running" : "stopped");
@@ -121,7 +128,7 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("\r\n-- loop -------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "state", control_state_name(cs.state));
-  printf("%-22s %llu  (%lu missed)\r\n", "swings", (unsigned long long)cs.swings,
+  printf("%-22s %llu  (%lu missed)\r\n", "events", (unsigned long long)cs.events,
          (unsigned long)cs.missed);
   print_ns("phase error", cs.err_ns);
   print_ns("phase error (filtered)", cs.filt_err_ns);
@@ -129,7 +136,7 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   print_ns("undelivered credit", cs.credit_ns);
   print_ns("hand offset target", cs.target_offset_ns);
   printf("%-22s %lld ppb\r\n", "pendulum drift", (long long)cs.drift_ppb);
-  printf("%-22s kp %lu swings, ki %lu swings, slew %ld ppm\r\n", "gains",
+  printf("%-22s kp %lu events, ki %lu events, slew %ld ppm\r\n", "gains",
          (unsigned long)cfg.kp_swings, (unsigned long)cfg.ki_swings,
          (long)cfg.slew_limit_ppm);
   printf("\r\n");
@@ -308,15 +315,78 @@ static int offset_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+/* Anything that changes the clock's rate or geometry has to ripple into
+   the detector's windows and the loop's schedule. */
+static void reclock(void)
+{
+  sense_refresh_timing();
+  control_init();
+  printf("swing %llu ns, sense event every %llu ns, windows %lu / %lu..%lu us\r\n",
+         (unsigned long long)cfg_period_ns(),
+         (unsigned long long)cfg_event_interval_ns(),
+         (unsigned long)sense_rearm_us(), (unsigned long)sense_min_event_us(),
+         (unsigned long)sense_max_event_us());
+}
+
 static int bph_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
-  cfg.beats_per_hour = (uint32_t)tp[0].ti.i;
+  cfg.beats_per_hour   = (uint32_t)tp[0].ti.i;
+  cfg.beats_per_period = (uint8_t)(tp[1].ti.i ? tp[1].ti.i : 2);
+  if (cfg.beats_per_hour == 0u) cfg.beats_per_hour = DEFAULT_BEATS_PER_HOUR;
+  printf("%lu bph, %u beats per swing = %lu swings/hour\r\n",
+         (unsigned long)cfg.beats_per_hour, cfg.beats_per_period,
+         (unsigned long)(cfg.beats_per_hour / cfg.beats_per_period));
+  reclock();
+  return 1;
+}
+
+static int geometry_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  cfg.events_per_period = (uint8_t)tp[0].ti.i;
+  if (cfg.events_per_period == 0u) cfg.events_per_period = 1u;
+  if (cfg.events_per_period > 4u)  cfg.events_per_period = 4u;
+  cfg.drive_offset_ppt  = (uint16_t)tp[1].ti.i;
+  if (cfg.drive_offset_ppt > 1000u) cfg.drive_offset_ppt = 1000u;
+  printf("sense coil reports %u time(s) per swing", cfg.events_per_period);
+  printf(cfg.events_per_period == 1u ? " (at an extreme)\r\n"
+                                     : " (crossing the centre)\r\n");
+  printf("drive coil reached %u ppt of a period later", cfg.drive_offset_ppt);
+  printf(cfg.drive_offset_ppt == 500u ? " (opposite extreme)\r\n"
+       : cfg.drive_offset_ppt == 0u   ? " (same place as the sense coil)\r\n"
+                                      : "\r\n");
+  reclock();
+  return 1;
+}
+
+static int windows_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  cfg.rearm_pct     = (uint8_t)tp[0].ti.i;
+  cfg.min_event_pct = (uint8_t)tp[1].ti.i;
+  cfg.max_event_pct = (uint8_t)tp[2].ti.i;
+  reclock();
+  return 1;
+}
+
+static int lock_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  cfg.acquire_events  = (uint16_t)tp[0].ti.i;
+  cfg.acquire_tol_pct = (uint8_t)tp[1].ti.i;
+  printf("lock after %u good events, gap tolerance %u%%\r\n",
+         cfg.acquire_events, cfg.acquire_tol_pct);
   control_init();
-  printf("%lu bph = %lu swings/hour, %llu ns per swing\r\n",
-         (unsigned long)cfg.beats_per_hour,
-         (unsigned long)(cfg.beats_per_hour / BEATS_PER_SWING),
-         (unsigned long long)(7200000000000ull / cfg.beats_per_hour));
+  return 1;
+}
+
+static int sample_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  cfg.sample_hz = (uint32_t)tp[0].ti.i;
+  printf("envelope sampling %lu hz - takes effect at the next reset\r\n",
+         (unsigned long)cfg.sample_hz);
   return 1;
 }
 
@@ -416,7 +486,11 @@ static const tinycl_command tcmds[] =
   { "MEASURE",  "swings,retard(y|n) - measure that step",      measure_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "CONTROL",  "y|n - close the loop",                control_cmd,  {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "OFFSET",   "ms - walk the hands by this much",       offset_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "BPH",      "beats per hour (8400 for this clock)",   bph_cmd,      {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "BPH",      "beats_per_hour,beats_per_swing",         bph_cmd,      {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "GEOMETRY", "events_per_swing,drive_offset_ppt",      geometry_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "WINDOWS",  "rearm%,min_bump%,max_bump% of interval", windows_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "LOCK",     "events_to_lock,gap_tolerance%",          lock_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "SAMPLE",   "hz - envelope sampling rate",            sample_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "GAINS",    "kp_swings,ki_swings",                    gains_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "SLEW",     "ppm - cap on rate correction",           slew_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "WIFI",     "ssid,password",                          wifi_cmd,     {TINYCL_PARM_STR, TINYCL_PARM_STR, TINYCL_PARM_END} },

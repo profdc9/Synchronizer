@@ -39,14 +39,14 @@
    the event cannot drag the baseline after itself. */
 #define BASELINE_SHIFT      12
 
-/* An event that lasts less than this is noise; one that lasts longer than
-   this is something stuck, not a pendulum. */
-#define MIN_EVENT_US        15000u
-#define MAX_EVENT_US        500000u
-
-/* Ignore anything arriving sooner than this after the previous event - one
-   swing cannot follow another that fast. */
-#define REARM_US            300000u
+/* The detector's three timing windows used to be fixed microsecond
+   constants, which quietly assumed a fast pendulum: a seconds pendulum
+   would have had every event rejected.  They are now percentages of the
+   expected interval between sense events, resolved here whenever the
+   configuration changes. */
+static uint32_t win_rearm_us     = 300000u;
+static uint32_t win_min_event_us = 15000u;
+static uint32_t win_max_event_us = 500000u;
 
 static volatile sense_event ring[SENSE_RING];
 static volatile uint32_t    ring_head, ring_tail;
@@ -72,6 +72,29 @@ static uint16_t ev_baseline;
 #define IVAL_RING 64
 static volatile uint32_t ivals[IVAL_RING];
 static volatile uint32_t ival_n, ival_head;
+
+void sense_refresh_timing(void)
+{
+  uint64_t iv_us = cfg_event_interval_ns() / 1000ull;
+  uint32_t r, mn, mx;
+
+  if (iv_us < 1000ull) iv_us = 1000ull;      /* refuse absurd geometry */
+
+  r  = (uint32_t)((iv_us * (cfg.rearm_pct     ? cfg.rearm_pct     : 35u)) / 100u);
+  mn = (uint32_t)((iv_us * (cfg.min_event_pct ? cfg.min_event_pct : 2u))  / 100u);
+  mx = (uint32_t)((iv_us * (cfg.max_event_pct ? cfg.max_event_pct : 60u)) / 100u);
+
+  if (mn < 1000u) mn = 1000u;
+  if (mx <= mn)   mx = mn * 4u;
+
+  win_rearm_us     = r;
+  win_min_event_us = mn;
+  win_max_event_us = mx;
+}
+
+uint32_t sense_rearm_us(void)     { return win_rearm_us; }
+uint32_t sense_min_event_us(void) { return win_min_event_us; }
+uint32_t sense_max_event_us(void) { return win_max_event_us; }
 
 static void tank_apply(uint32_t hz)
 {
@@ -162,7 +185,7 @@ static bool sample_cb(repeating_timer_t *rt)
       baseline_q += e >> BASELINE_SHIFT;
     }
 
-    if (dev >= thr && (last_event_us == 0u || (now - last_event_us) > REARM_US))
+    if (dev >= thr && (last_event_us == 0u || (now - last_event_us) > win_rearm_us))
     {
       int32_t pdev = cfg.detect_falling ? (base - (int32_t)prev_sample)
                                         : ((int32_t)prev_sample - base);
@@ -184,10 +207,10 @@ static bool sample_cb(repeating_timer_t *rt)
       uint32_t width   = (uint32_t)(fall_us - rise_us);
 
       in_event = false;
-      if (width >= MIN_EVENT_US && width <= MAX_EVENT_US)
+      if (width >= win_min_event_us && width <= win_max_event_us)
         push_event(rise_us + width / 2u, ev_peak, ev_baseline, width);
     }
-    else if ((now - rise_us) > MAX_EVENT_US)
+    else if ((now - rise_us) > win_max_event_us)
     {
       /* Stuck high - abandon the event and let the baseline re-acquire. */
       in_event   = false;
@@ -219,7 +242,14 @@ void sense_init(void)
   prev_us = time_us_64(); prev_sample = 0;
   running = cfg.sense_enabled != 0;
 
-  add_repeating_timer_us(-(int64_t)(1000000 / SENSE_SAMPLE_HZ), sample_cb, NULL, &samp_timer);
+  sense_refresh_timing();
+
+  {
+    uint32_t hz = cfg.sample_hz ? cfg.sample_hz : SENSE_SAMPLE_HZ;
+    if (hz < 100u)   hz = 100u;
+    if (hz > 20000u) hz = 20000u;
+    add_repeating_timer_us(-(int64_t)(1000000u / hz), sample_cb, NULL, &samp_timer);
+  }
 }
 
 void sense_set_tank_hz(uint32_t hz) { tank_apply(hz); cfg.tank_hz = tank_hz; }

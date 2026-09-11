@@ -1,8 +1,13 @@
 # Synchronizer firmware
 
-Disciplines a wind-up 31-day pendulum clock to NTP time (GPS later), without
-modifying the clock. Two coils sit behind the case, on the pendulum's swing
-path, at opposite extremes, acting through the wooden back wall.
+Disciplines a pendulum clock to NTP time (GPS later), without modifying the
+clock. Two coils sit behind the case on the pendulum's swing path, acting
+through the back wall.
+
+Nothing here assumes a particular movement. Pendulum period, escapement,
+gear ratio, coil placement and detector timing are all configuration held in
+flash. The defaults describe the 31-day clock it was developed against —
+they are a starting point, not a specification.
 
 Target: **Raspberry Pi Pico W**, SDK 2.x.
 
@@ -160,7 +165,50 @@ not one per swing.
 later than it currently thinks, and it will walk the hands there at the
 `SLEW` rate rather than jumping. Nobody touches the clock.
 
-## The numbers this clock actually has
+## Setting it up for a different clock
+
+Six commands cover everything clock-specific. Each one takes effect
+immediately and `SAVE` keeps it; the config carries a magic number and a
+version, so changing the structure in a future build restores defaults
+rather than reading a stale layout.
+
+```
+BPH      8400,2     beats per hour, and beats per full swing
+GEOMETRY 1,500      sense events per swing, drive coil offset
+WINDOWS  35,2,60    detector windows, as % of the event interval
+LOCK     12,4       events needed to lock, gap tolerance %
+SAMPLE   1000       envelope sampling rate
+TANK     23400      tank drive frequency (RESONANCE finds this)
+```
+
+**`BPH`** is the gear ratio. `beats_per_swing` is 2 for an anchor, deadbeat
+or pin-pallet escapement — two pallets, one tooth released per half period.
+
+**`GEOMETRY`** is where you put the coils, and it is the one most likely to
+differ from this build:
+
+| Sense coil | Drive coil | Command |
+|---|---|---|
+| at a swing extreme | at the other extreme | `GEOMETRY 1,500` |
+| at a swing extreme | at the same extreme | `GEOMETRY 1,0` |
+| at the swing centre | at an extreme | `GEOMETRY 2,250` |
+
+A coil at an extreme sees the bob once per full period; one at the centre
+sees it twice. The offset is how long after a sense event the bob reaches
+the *drive* coil, in parts per thousand of a full period.
+
+**`WINDOWS`** are percentages of the expected interval between sense events,
+not fixed microseconds, so they follow the pendulum. On a 0.857 s clock the
+defaults resolve to a 300 ms rearm and a bump between 17 ms and 514 ms; on a
+seconds pendulum, to 700 ms and 40 ms–1.2 s. `STATUS` shows the resolved
+values.
+
+The event schedule is exact integer arithmetic in all of these. Checked on
+the host across 8400/3600/7200/5400/14400/9000 bph, one and two events per
+period, and a single-beat escapement: **zero nanoseconds of error over a
+year** in every case.
+
+## The clock this was developed against
 
 Measured from a three-minute recording of the escapement on 2026-09-10:
 

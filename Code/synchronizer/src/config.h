@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  2u
+#define CONFIG_VERSION  3u
 
 #define CONFIG_SSID_LEN 33
 #define CONFIG_PASS_LEN 65
@@ -42,14 +42,46 @@ typedef struct _synchronizer_config
   uint32_t magic;
   uint32_t version;
 
-  /* --- the clock -------------------------------------------------- */
-  uint32_t beats_per_hour;      /* gear ratio; 8400 for this movement    */
+  /* --- the clock --------------------------------------------------
+
+     Everything about the movement and the coil placement lives here, so
+     the firmware never assumes the clock it was developed on.  The
+     defaults describe that clock; they are a starting point, not a
+     specification. */
+
+  uint32_t beats_per_hour;      /* gear ratio: escapement beats per hour */
+  uint8_t  beats_per_period;    /* beats per FULL swing; 2 for an anchor,
+                                   deadbeat or pin-pallet escapement     */
+
+  /* Where the coils sit on the swing.
+
+     events_per_period is 1 for a sense coil at an extreme of the swing -
+     the bob only reaches it once per full period - and 2 for one at the
+     centre, which the bob crosses twice.
+
+     drive_offset_ppt is how long after a sense event the bob reaches the
+     DRIVE coil, in parts per thousand of a full period.  Coils at
+     opposite extremes is 500.  Both at the same extreme is 0.  Sense at
+     the centre and drive at an extreme is 250, which holds for either
+     centre crossing. */
+  uint8_t  events_per_period;
+  uint16_t drive_offset_ppt;
 
   /* --- sense ------------------------------------------------------ */
   uint32_t tank_hz;             /* square wave driven onto GPIO_OSCIL    */
   uint16_t detect_threshold;    /* ADC counts below/above baseline       */
   uint8_t  detect_falling;      /* 1 if the bob makes amplitude DROP     */
   uint8_t  sense_enabled;
+  uint32_t sample_hz;           /* envelope sampling rate                */
+
+  /* Detector timing, as percentages of the expected interval between
+     sense events, so they scale with the pendulum instead of assuming a
+     fast one. */
+  uint8_t  rearm_pct;           /* ignore events closer together than    */
+  uint8_t  min_event_pct;       /* a bump shorter than this is noise     */
+  uint8_t  max_event_pct;       /* longer than this is something stuck   */
+  uint8_t  acquire_tol_pct;     /* gap tolerance while acquiring lock    */
+  uint16_t acquire_events;      /* consecutive good events to lock       */
 
   /* What RESONANCE last measured, with nothing metallic near the coil.
      Kept so STATUS can show how far the drive has been detuned from the
@@ -91,6 +123,12 @@ typedef struct _synchronizer_config
 extern synchronizer_config cfg;
 
 void config_load(void);         /* loads, or installs defaults           */
+
+/* Derived from the configuration above; the single source of truth for
+   every piece of code that needs to know how fast this clock runs. */
+uint64_t cfg_period_ns(void);        /* one full pendulum swing          */
+uint64_t cfg_event_interval_ns(void);/* between successive sense events  */
+void     cfg_event_ratio(uint64_t *num, uint64_t *den); /* exact form    */
 bool config_save(void);         /* writes the flash sector               */
 void config_defaults(void);     /* in RAM only; call config_save to keep */
 
