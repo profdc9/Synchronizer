@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "lwip/tcp.h"
+#include "pico/cyw43_arch.h"
 #include "httpd.h"
 
 typedef struct _http_conn
@@ -288,12 +289,20 @@ void httpd_init(uint16_t port)
   struct tcp_pcb *pcb;
 
   if (listener) return;
+
+  cyw43_arch_lwip_begin();
   pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);
-  if (!pcb) return;
-  if (tcp_bind(pcb, IP_ANY_TYPE, port) != ERR_OK) { tcp_close(pcb); return; }
-  listener = tcp_listen_with_backlog(pcb, 2);
-  if (!listener) { tcp_close(pcb); return; }
-  tcp_accept(listener, on_accept);
+  if (pcb)
+  {
+    if (tcp_bind(pcb, IP_ANY_TYPE, port) == ERR_OK)
+    {
+      listener = tcp_listen_with_backlog(pcb, 2);
+      if (listener) tcp_accept(listener, on_accept);
+      else tcp_close(pcb);
+    }
+    else tcp_close(pcb);
+  }
+  cyw43_arch_lwip_end();
 }
 
 bool httpd_running(void)     { return listener != NULL; }

@@ -32,6 +32,10 @@
 #include "drive.h"
 #include "timebase.h"
 #include "netclock.h"
+#include "httpd.h"
+#include "dhcpserver.h"
+#include "dnsserver.h"
+#include "lwip/netif.h"
 #include "control.h"
 #include "pico/stdio.h"
 #include "pico/stdio/driver.h"
@@ -487,6 +491,56 @@ static int hostname_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+/* Everything needed to tell apart "the client never reached us", "we
+   answered and it was ignored", and "the interface is not what I think". */
+static int net_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  struct netif *n;
+  uint32_t a, b, d;
+
+  (void)args; (void)tp; (void)v;
+
+  printf("\r\n-- interfaces ------------------------------------------\r\n");
+  for (n = netif_list; n; n = n->next)
+  {
+    printf("  %c%c%u  %-15s mask %-15s gw %-15s %s%s%s%s\r\n",
+           n->name[0], n->name[1], n->num,
+           ip4addr_ntoa(netif_ip4_addr(n)),
+           ip4addr_ntoa(netif_ip4_netmask(n)),
+           ip4addr_ntoa(netif_ip4_gw(n)),
+           netif_is_up(n)        ? "up "        : "DOWN ",
+           netif_is_link_up(n)   ? "link "      : "nolink ",
+           (n->flags & NETIF_FLAG_BROADCAST) ? "bcast " : "nobcast ",
+           (n == netif_default)  ? "DEFAULT"    : "");
+  }
+  if (!netif_list) printf("  (none)\r\n");
+
+  printf("\r\n-- servers ---------------------------------------------\r\n");
+  dhcpserver_stats(&a, &b, &d);
+  printf("  dhcp   %-8s rx %lu, replied %lu, ignored %lu, leases %lu\r\n",
+         dhcpserver_running() ? "running" : "stopped",
+         (unsigned long)a, (unsigned long)b, (unsigned long)d,
+         (unsigned long)dhcpserver_leases());
+  dnsserver_stats(&a, &b);
+  printf("  dns    %-8s queries %lu, answered %lu\r\n",
+         dnsserver_running() ? "running" : "stopped",
+         (unsigned long)a, (unsigned long)b);
+  printf("  http   %-8s requests %lu\r\n",
+         httpd_running() ? "running" : "stopped",
+         (unsigned long)httpd_requests());
+  printf("  mdns   %-8s %s.local\r\n",
+         net_mdns_active() ? "running" : "stopped", net_hostname());
+
+  printf("\r\n-- wifi ------------------------------------------------\r\n");
+  printf("  state  %s\r\n", net_status_name());
+  if (net_in_ap())
+    printf("  ap     \"%s\", key \"%s\"\r\n", net_ap_ssid(), cfg.ap_pass);
+  else
+    printf("  ssid   \"%s\"\r\n", cfg.ssid);
+  printf("\r\n");
+  return 1;
+}
+
 static int ap_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
@@ -574,6 +628,7 @@ static const tinycl_command tcmds[] =
   { "WIFI",     "ssid,password",                          wifi_cmd,     {TINYCL_PARM_STR, TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "NTP",      "hostname",                               ntp_cmd,      {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "SYNC",     "ask for an NTP exchange now",            sync_cmd,     {TINYCL_PARM_END} },
+  { "NET",      "interfaces, servers and their counters",  net_cmd,      {TINYCL_PARM_END} },
   { "AP",       "y|n - raise the setup access point",     ap_cmd,       {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "APKEY",    "password for the setup access point",    apkey_cmd,    {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "HOSTNAME", "name advertised over mdns",              hostname_cmd, {TINYCL_PARM_STR, TINYCL_PARM_END} },

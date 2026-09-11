@@ -26,6 +26,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "lwip/ip_addr.h"
+#include "lwip/netif.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,10 +40,19 @@ extern "C" {
 
 #define DHCP_LEASES  8
 
-void dhcpserver_start(const ip4_addr_t *gateway, const ip4_addr_t *mask);
+/* The netif is not optional: the reply is a broadcast, and lwIP routes a
+   broadcast to the default interface, which is not necessarily the one the
+   request arrived on when both station and AP netifs exist.  Binding and
+   sending explicitly removes the question. */
+void dhcpserver_start(struct netif *nif, const ip4_addr_t *gateway,
+                      const ip4_addr_t *mask);
 void dhcpserver_stop(void);
 bool dhcpserver_running(void);
 uint32_t dhcpserver_leases(void);
+
+/* Counters, so a failure to hand out an address can be told apart from a
+   failure to receive the request at all. */
+void dhcpserver_stats(uint32_t *rx, uint32_t *tx, uint32_t *dropped);
 
 #ifdef __cplusplus
 }

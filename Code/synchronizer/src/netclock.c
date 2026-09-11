@@ -313,8 +313,8 @@ static void ap_start(void)
   netif_set_addr(&cyw43_state.netif[CYW43_ITF_AP], &ap_ip, &ap_mask, &ap_ip);
   cyw43_arch_lwip_end();
 
-  dhcpserver_start(&ap_ip, &ap_mask);
-  dnsserver_start(&ap_ip);
+  dhcpserver_start(&cyw43_state.netif[CYW43_ITF_AP], &ap_ip, &ap_mask);
+  dnsserver_start(&cyw43_state.netif[CYW43_ITF_AP], &ap_ip);
 
   ap_up = true;
   state = NET_AP;

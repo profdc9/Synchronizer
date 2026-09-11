@@ -23,6 +23,7 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "lwip/udp.h"
+#include "pico/cyw43_arch.h"
 #include "dnsserver.h"
 
 #define DNS_PORT  53
@@ -30,6 +31,7 @@
 
 static struct udp_pcb *pcb;
 static ip4_addr_t self_ip;
+static uint32_t   q_count, a_count;
 
 static void recv_cb(void *arg, struct udp_pcb *upcb, struct pbuf *p,
                     const ip_addr_t *addr, u16_t port)
@@ -42,6 +44,7 @@ static void recv_cb(void *arg, struct udp_pcb *upcb, struct pbuf *p,
   (void)arg; (void)upcb;
 
   if (!p) return;
+  q_count++;
   len = p->tot_len;
   if (len < 12u || len > sizeof(msg) - 16u) { pbuf_free(p); return; }
   pbuf_copy_partial(p, msg, len, 0);
@@ -80,24 +83,40 @@ static void recv_cb(void *arg, struct udp_pcb *upcb, struct pbuf *p,
   if (!out) return;
   memcpy(out->payload, msg, out->len);
   udp_sendto(pcb, out, addr, port);
+  a_count++;
   pbuf_free(out);
 }
 
-void dnsserver_start(const ip4_addr_t *ours)
+void dnsserver_start(struct netif *nif, const ip4_addr_t *ours)
 {
   if (pcb) return;
   self_ip = *ours;
+  q_count = a_count = 0;
+
+  cyw43_arch_lwip_begin();
   pcb = udp_new_ip_type(IPADDR_TYPE_ANY);
-  if (!pcb) return;
-  udp_bind(pcb, IP_ANY_TYPE, DNS_PORT);
-  udp_recv(pcb, recv_cb, NULL);
+  if (pcb)
+  {
+    udp_bind(pcb, IP_ANY_TYPE, DNS_PORT);
+    if (nif) udp_bind_netif(pcb, nif);
+    udp_recv(pcb, recv_cb, NULL);
+  }
+  cyw43_arch_lwip_end();
 }
 
 void dnsserver_stop(void)
 {
   if (!pcb) return;
+  cyw43_arch_lwip_begin();
   udp_remove(pcb);
+  cyw43_arch_lwip_end();
   pcb = NULL;
+}
+
+void dnsserver_stats(uint32_t *queries, uint32_t *answers)
+{
+  if (queries) *queries = q_count;
+  if (answers) *answers = a_count;
 }
 
 bool dnsserver_running(void) { return pcb != NULL; }

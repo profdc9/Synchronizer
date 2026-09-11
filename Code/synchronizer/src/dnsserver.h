@@ -25,6 +25,7 @@
 
 #include <stdbool.h>
 #include "lwip/ip_addr.h"
+#include "lwip/netif.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,9 +38,10 @@ extern "C" {
 
    Only used while the provisioning AP is up. */
 
-void dnsserver_start(const ip4_addr_t *ours);
+void dnsserver_start(struct netif *nif, const ip4_addr_t *ours);
 void dnsserver_stop(void);
 bool dnsserver_running(void);
+void dnsserver_stats(uint32_t *queries, uint32_t *answers);
 
 #ifdef __cplusplus
 }

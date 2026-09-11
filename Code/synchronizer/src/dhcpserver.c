@@ -24,6 +24,7 @@
 #include "pico/stdlib.h"
 #include "lwip/udp.h"
 #include "lwip/netif.h"
+#include "pico/cyw43_arch.h"
 #include "dhcpserver.h"
 
 #define PORT_SERVER   67
@@ -46,9 +47,11 @@ typedef struct
 typedef struct { uint8_t mac[6]; uint32_t expiry_s; bool used; } lease;
 
 static struct udp_pcb *pcb;
+static struct netif   *ap_netif;
 static lease     leases[DHCP_LEASES];
 static ip4_addr_t gw, nm;
 static uint32_t  lease_count;
+static uint32_t  rx_count, tx_count, drop_count;
 
 /* --- option walking ---------------------------------------------------- */
 
@@ -120,14 +123,15 @@ static void recv_cb(void *arg, struct udp_pcb *upcb, struct pbuf *p,
 
   (void)arg; (void)upcb; (void)addr; (void)port;
 
-  if (p->tot_len < 240u || p->tot_len > sizeof(m)) { pbuf_free(p); return; }
+  rx_count++;
+  if (p->tot_len < 240u || p->tot_len > sizeof(m)) { drop_count++; pbuf_free(p); return; }
   memset(&m, 0, sizeof(m));
   pbuf_copy_partial(p, &m, p->tot_len, 0);
   pbuf_free(p);
 
-  if (m.op != 1u) return;                     /* not a request */
+  if (m.op != 1u) { drop_count++; return; }   /* not a request */
   o = opt_find(&m, (uint16_t)sizeof(m), 53, NULL);
-  if (!o) return;
+  if (!o) { drop_count++; return; }
   type = *o;
 
   if (type == 7u)                             /* RELEASE */
@@ -137,7 +141,7 @@ static void recv_cb(void *arg, struct udp_pcb *upcb, struct pbuf *p,
       if (leases[i].used && memcmp(leases[i].mac, m.chaddr, 6) == 0) leases[i].used = false;
     return;
   }
-  if (type != 1u && type != 3u) return;       /* only DISCOVER and REQUEST */
+  if (type != 1u && type != 3u) { drop_count++; return; }  /* DISCOVER, REQUEST */
 
   idx       = lease_index(m.chaddr);
   client_ip = (server_ip & 0xFFFFFF00u) | (uint32_t)((server_ip & 0xFFu) + 1u + idx);
@@ -164,32 +168,61 @@ static void recv_cb(void *arg, struct udp_pcb *upcb, struct pbuf *p,
                                     so every lookup lands on the page    */
   *w++ = 0xFF;
 
-  out = pbuf_alloc(PBUF_TRANSPORT, (u16_t)(w - (uint8_t *)&m), PBUF_RAM);
-  if (!out) return;
-  memcpy(out->payload, &m, out->len);
-  /* The client has no address yet, so this has to go to the broadcast. */
-  udp_sendto(pcb, out, IP_ADDR_BROADCAST, PORT_CLIENT);
-  pbuf_free(out);
+  {
+    /* BOOTP defines a 300-byte message and some clients still expect one,
+       so pad rather than send the 274 bytes the options actually need. */
+    uint16_t n = (uint16_t)(w - (uint8_t *)&m);
+    if (n < 300u) n = 300u;
+
+    out = pbuf_alloc(PBUF_TRANSPORT, n, PBUF_RAM);
+    if (!out) { drop_count++; return; }
+    memcpy(out->payload, &m, n);
+
+    /* The client has no address yet, so this has to be a broadcast - and it
+       has to leave by the interface it arrived on, not the default one. */
+    if (ap_netif) udp_sendto_if(pcb, out, IP_ADDR_BROADCAST, PORT_CLIENT, ap_netif);
+    else          udp_sendto(pcb, out, IP_ADDR_BROADCAST, PORT_CLIENT);
+    tx_count++;
+    pbuf_free(out);
+  }
 }
 
-void dhcpserver_start(const ip4_addr_t *gateway, const ip4_addr_t *mask)
+void dhcpserver_start(struct netif *nif, const ip4_addr_t *gateway,
+                      const ip4_addr_t *mask)
 {
   if (pcb) return;
-  gw = *gateway; nm = *mask;
+  gw = *gateway; nm = *mask; ap_netif = nif;
   memset(leases, 0, sizeof(leases));
-  lease_count = 0;
+  lease_count = rx_count = tx_count = drop_count = 0;
 
+  /* lwIP runs from an interrupt under cyw43_arch_lwip_threadsafe_background,
+     so every call into it from here has to hold the lock. */
+  cyw43_arch_lwip_begin();
   pcb = udp_new_ip_type(IPADDR_TYPE_ANY);
-  if (!pcb) return;
-  udp_bind(pcb, IP_ANY_TYPE, PORT_SERVER);
-  udp_recv(pcb, recv_cb, NULL);
+  if (pcb)
+  {
+    udp_bind(pcb, IP_ANY_TYPE, PORT_SERVER);
+    if (nif) udp_bind_netif(pcb, nif);
+    udp_recv(pcb, recv_cb, NULL);
+  }
+  cyw43_arch_lwip_end();
 }
 
 void dhcpserver_stop(void)
 {
   if (!pcb) return;
+  cyw43_arch_lwip_begin();
   udp_remove(pcb);
+  cyw43_arch_lwip_end();
   pcb = NULL;
+  ap_netif = NULL;
+}
+
+void dhcpserver_stats(uint32_t *rx, uint32_t *tx, uint32_t *dropped)
+{
+  if (rx) *rx = rx_count;
+  if (tx) *tx = tx_count;
+  if (dropped) *dropped = drop_count;
 }
 
 bool dhcpserver_running(void) { return pcb != NULL; }
