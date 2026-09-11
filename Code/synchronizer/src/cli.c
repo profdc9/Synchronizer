@@ -37,6 +37,7 @@
 #include "dnsserver.h"
 #include "lwip/netif.h"
 #include "control.h"
+#include "chime.h"
 #include "pico/stdio.h"
 #include "pico/stdio/driver.h"
 #include "tinycl.h"
@@ -85,6 +86,13 @@ static void print_ns(const char *label, int64_t ns)
 {
   int64_t us = ns / 1000;
   printf("%-22s %lld us\r\n", label, (long long)us);
+}
+
+static void print_sod(const char *label, uint32_t sod)
+{
+  printf("%-22s %02lu:%02lu:%02lu\r\n", label,
+         (unsigned long)(sod / 3600u), (unsigned long)((sod / 60u) % 60u),
+         (unsigned long)(sod % 60u));
 }
 
 static int status_cmd(int args, tinycl_parameter *tp, void *v)
@@ -152,6 +160,8 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("\r\n-- time -------------------------------------------------\r\n");
   printf("%-22s %s  %s\r\n", "network", net_status_name(), net_ip());
+  printf("%-22s UTC%+ld:%02lu\r\n", "local time is",
+         (long)(cfg.tz_offset_s / 3600), (unsigned long)((abs(cfg.tz_offset_s) / 60) % 60));
   printf("%-22s %s.local%s\r\n", "name", net_hostname(),
          net_mdns_active() ? "" : "   (not advertised - no interface up)");
   if (net_in_ap())
@@ -175,6 +185,26 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   }
   else
     printf("%-22s not set\r\n", "unix time");
+
+  printf("\r\n-- chime ------------------------------------------------\r\n");
+  if (chime_have())
+  {
+    uint32_t away, face, real;
+    int32_t  o = chime_offset_ms();
+    printf("%-22s %ld.%03lu s %s\r\n", "hands are",
+           (long)(o / 1000), (unsigned long)(abs(o) % 1000),
+           (o >= 0) ? "fast" : "slow");
+    if (chime_next(&away, &face, &real))
+    {
+      printf("%-22s %lu:%02lu from now\r\n", "next chime",
+             (unsigned long)(away / 60u), (unsigned long)(away % 60u));
+      print_sod("  striking", face);
+      print_sod("  at true time", real);
+    }
+  }
+  else
+    printf("%-22s not measured - use CHIME once you hear it\r\n", "hands are");
+  printf("%-22s every %lu min\r\n", "chimes", (unsigned long)cfg.chime_interval_min);
 
   printf("\r\n-- loop -------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "state", control_state_name(cs.state));
@@ -493,6 +523,64 @@ static int hostname_cmd(int args, tinycl_parameter *tp, void *v)
 
 /* Everything needed to tell apart "the client never reached us", "we
    answered and it was ignored", and "the interface is not what I think". */
+static int chime_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  if (!chime_mark((uint32_t)tp[0].ti.i, (uint32_t)tp[1].ti.i))
+  {
+    printf("no time yet - the clock cannot be placed against UTC until NTP has a fix\r\n");
+    return 1;
+  }
+  {
+    int32_t o = chime_offset_ms();
+    printf("hands are %ld.%03lu s %s\r\n",
+           (long)(o / 1000), (unsigned long)(abs(o) % 1000),
+           (o >= 0) ? "FAST" : "slow");
+  }
+  {
+    uint32_t away, face, real;
+    if (chime_next(&away, &face, &real))
+    {
+      printf("next chime in %lu:%02lu\r\n",
+             (unsigned long)(away / 60u), (unsigned long)(away % 60u));
+      print_sod("  it will strike", face);
+      print_sod("  at true time", real);
+    }
+  }
+  printf("'chimeapply' to have the loop take it out, 'save' to keep it\r\n");
+  return 1;
+}
+
+static int tz_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  cfg.tz_offset_s = tp[0].ti.i * 60;
+  printf("local time is UTC%+ld:%02lu - the chime is read against this\r\n",
+         (long)(cfg.tz_offset_s / 3600), (unsigned long)((abs(cfg.tz_offset_s) / 60) % 60));
+  return 1;
+}
+
+static int chimeset_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  cfg.chime_interval_min = (uint32_t)tp[0].ti.i;
+  if (cfg.chime_interval_min == 0u || cfg.chime_interval_min > 720u)
+    cfg.chime_interval_min = 60u;
+  cfg.chime_latency_ms = (uint32_t)tp[1].ti.i;
+  printf("chimes every %lu min, press allowance %lu ms\r\n",
+         (unsigned long)cfg.chime_interval_min, (unsigned long)cfg.chime_latency_ms);
+  return 1;
+}
+
+static int chimeapply_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)tp; (void)v;
+  if (!chime_apply_to_loop()) { printf("nothing measured yet\r\n"); return 1; }
+  printf("loop asked to take out %ld ms; it slews at the SLEW limit\r\n",
+         (long)chime_offset_ms());
+  return 1;
+}
+
 static int net_cmd(int args, tinycl_parameter *tp, void *v)
 {
   struct netif *n;
@@ -605,9 +693,9 @@ static const tinycl_command tcmds[] =
 {
   { "HELP",     "this list",                              help_cmd,     {TINYCL_PARM_END} },
   { "STATUS",   "everything the device knows",            status_cmd,   {TINYCL_PARM_END} },
-  { "RESONANCE","lo,hi,plot(y|n) - calibrate the tank",   resonance_cmd,{TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
-  { "SWEEP",    "from,to,step hz - raw table",            sweep_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "CAPTURE",  "rate_hz,count - raw tank waveform",      capture_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "RESONANCE","lo hi plot(y|n) - calibrate the tank",   resonance_cmd,{TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
+  { "SWEEP",    "from to step (hz) - raw table",            sweep_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "CAPTURE",  "rate_hz count - raw tank waveform",      capture_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "TANK",     "hz - set tank drive frequency",          tank_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "SENSE",    "y|n - detector",                      sense_cmd,    {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "THRESH",   "counts - detection threshold",           thresh_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
@@ -616,22 +704,26 @@ static const tinycl_command tcmds[] =
   { "PULSE",    "us - fire the coil once, now",           pulse_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "COILOFF",  "drop the coil and cancel pending",       coiloff_cmd,  {TINYCL_PARM_END} },
   { "PW",       "us - correction pulse width",            pw_cmd,       {TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "PTIME",    "advance_us,retard_us - pulse placing",   ptime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "PTIME",    "advance_us retard_us - pulse placing",   ptime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "AUTH",     "ns - phase step one pulse buys",         auth_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "MEASURE",  "swings,retard(y|n) - measure that step",      measure_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
+  { "MEASURE",  "swings retard(y|n) - measure that step",      measure_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "CONTROL",  "y|n - close the loop",                control_cmd,  {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "OFFSET",   "ms - walk the hands by this much",       offset_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "BPH",      "beats_per_hour,beats_per_swing",         bph_cmd,      {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "GEOMETRY", "events_per_swing,drive_offset_ppt",      geometry_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "WINDOWS",  "rearm%,min_bump%,max_bump% of interval", windows_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "LOCK",     "events_to_lock,gap_tolerance%",          lock_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "BPH",      "beats_per_hour beats_per_swing",         bph_cmd,      {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "GEOMETRY", "events_per_swing drive_offset_ppt",      geometry_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "WINDOWS",  "rearm% min% max% of the interval", windows_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "LOCK",     "events_to_lock gap_tolerance%",          lock_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "SAMPLE",   "hz - envelope sampling rate",            sample_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "GAINS",    "kp_swings,ki_swings",                    gains_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "GAINS",    "kp_swings ki_swings",                    gains_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "SLEW",     "ppm - cap on rate correction",           slew_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "WIFI",     "ssid,password",                          wifi_cmd,     {TINYCL_PARM_STR, TINYCL_PARM_STR, TINYCL_PARM_END} },
+  { "WIFI",     "ssid password  (quote if spaces)",                          wifi_cmd,     {TINYCL_PARM_STR, TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "NTP",      "hostname",                               ntp_cmd,      {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "SYNC",     "ask for an NTP exchange now",            sync_cmd,     {TINYCL_PARM_END} },
   { "NET",      "interfaces, servers and their counters",  net_cmd,      {TINYCL_PARM_END} },
+  { "CHIME",    "hour minute - heard it strike, now",     chime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "CHIMESET", "interval_min press_allowance_ms",        chimeset_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "TZ",       "minutes from UTC (-300 = UTC-5)",        tz_cmd,       {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "CHIMEAPPLY","hand the measured error to the loop",   chimeapply_cmd, {TINYCL_PARM_END} },
   { "AP",       "y|n - raise the setup access point",     ap_cmd,       {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "APKEY",    "password for the setup access point",    apkey_cmd,    {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "HOSTNAME", "name advertised over mdns",              hostname_cmd, {TINYCL_PARM_STR, TINYCL_PARM_END} },
@@ -688,7 +780,8 @@ void cli_init(void)
   stdio_set_driver_enabled(&cap_driver, true);
   tinycl_do_echo = 1;
   printf("\r\nSynchronizer - pendulum clock discipline\r\n");
-  printf("type HELP for commands\r\n> ");
+  printf("type HELP for commands.  Arguments are separated by spaces;\r\n"
+         "quote any that contain one, as in: WIFI \"my net\" \"my key\"\r\n> ");
 }
 
 void cli_poll(void)

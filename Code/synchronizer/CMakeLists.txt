@@ -31,6 +31,7 @@ add_executable(synchronizer
     src/sense.c
     src/drive.c
     src/control.c
+    src/chime.c
     src/netclock.c
     src/cli.c
     src/httpd.c

@@ -31,7 +31,20 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  5u
+#define CONFIG_VERSION  6u
+
+/* Who we are on the network lives in its own sector, with its own magic and
+   its own version that changes only when THESE fields change.
+
+   The main configuration restores defaults whenever its layout changes,
+   which is the right thing for tuning values - they are guesses anyway, and
+   reading a stale layout would be worse.  It is the wrong thing for Wi-Fi
+   credentials: it means every firmware update that adds a setting throws
+   the device off the network and back to its setup access point, which
+   somebody then has to re-provision from a phone.  Keeping them apart costs
+   one flash sector. */
+#define NETCFG_MAGIC    0x53594e4eu   /* "SYNN" */
+#define NETCFG_VERSION  1u
 
 #define CONFIG_SSID_LEN 33
 #define CONFIG_PASS_LEN 65
@@ -109,6 +122,17 @@ typedef struct _synchronizer_config
   uint32_t ki_swings;
   int32_t  slew_limit_ppm;      /* cap on commanded rate correction      */
 
+  /* --- the chime ---------------------------------------------------
+
+     Where the hands actually are, measured by listening.  The loop keeps
+     the pendulum on rate; this is what says whether the dial agrees. */
+  uint32_t chime_interval_min;  /* 60 hourly, 30 half, 15 quarters       */
+  int32_t  chime_offset_ms;     /* hands ahead of true local time        */
+  uint32_t chime_latency_ms;    /* allowance for the press trailing it   */
+  uint64_t chime_ref_utc;       /* unix seconds of the last mark         */
+  uint8_t  chime_valid;
+  uint8_t  pad1[3];
+
   /* --- network ---------------------------------------------------- */
   char     ssid[CONFIG_SSID_LEN];
   char     pass[CONFIG_PASS_LEN];
@@ -135,6 +159,7 @@ typedef struct _synchronizer_config
 extern synchronizer_config cfg;
 
 void config_load(void);         /* loads, or installs defaults           */
+bool config_save_network(void); /* the credentials sector alone          */
 
 /* Derived from the configuration above; the single source of truth for
    every piece of code that needs to know how fast this clock runs. */

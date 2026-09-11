@@ -36,11 +36,26 @@ synchronizer_config cfg;
 #define CONFIG_FLASH_OFFSET  (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
 #define CONFIG_FLASH_ADDR    ((const uint8_t *)(XIP_BASE + CONFIG_FLASH_OFFSET))
 
-static uint32_t config_crc(const synchronizer_config *c)
+#define NETCFG_FLASH_OFFSET  (PICO_FLASH_SIZE_BYTES - 2u * FLASH_SECTOR_SIZE)
+#define NETCFG_FLASH_ADDR    ((const uint8_t *)(XIP_BASE + NETCFG_FLASH_OFFSET))
+
+/* Only the things that identify the device on a network.  Anything added
+   here means re-provisioning, so add sparingly. */
+typedef struct _network_config
+{
+  uint32_t magic;
+  uint32_t version;
+  char     ssid[CONFIG_SSID_LEN];
+  char     pass[CONFIG_PASS_LEN];
+  char     ap_pass[CONFIG_PASS_LEN];
+  char     hostname[CONFIG_NAME_LEN];
+  uint32_t crc;
+} network_config;
+
+static uint32_t crc32_over(const void *data, size_t n)
 {
   /* CRC-32, bitwise; runs once per save so speed does not matter. */
-  const uint8_t *p = (const uint8_t *)c;
-  size_t n = offsetof(synchronizer_config, crc);
+  const uint8_t *p = (const uint8_t *)data;
   uint32_t crc = 0xFFFFFFFFu;
   for (size_t i = 0; i < n; i++)
   {
@@ -49,6 +64,64 @@ static uint32_t config_crc(const synchronizer_config *c)
       crc = (crc >> 1) ^ (0xEDB88320u & (-(int32_t)(crc & 1)));
   }
   return ~crc;
+}
+
+static uint32_t config_crc(const synchronizer_config *c)
+{ return crc32_over(c, offsetof(synchronizer_config, crc)); }
+
+static uint32_t netcfg_crc(const network_config *n)
+{ return crc32_over(n, offsetof(network_config, crc)); }
+
+static void flash_write_sector(uint32_t offset, const void *src, size_t len)
+{
+  static uint8_t page[FLASH_SECTOR_SIZE];
+  uint32_t ints;
+
+  memset(page, 0xFF, sizeof(page));
+  memcpy(page, src, len);
+
+  /* Erase and program must not be interrupted by anything that executes
+     from flash, and on a Pico W the cyw43 background handler does exactly
+     that.  Mask interrupts across the whole operation. */
+  ints = save_and_disable_interrupts();
+  flash_range_erase(offset, FLASH_SECTOR_SIZE);
+  flash_range_program(offset, page, FLASH_SECTOR_SIZE);
+  restore_interrupts(ints);
+}
+
+bool config_save_network(void)
+{
+  network_config n;
+
+  memset(&n, '\0', sizeof(n));
+  n.magic   = NETCFG_MAGIC;
+  n.version = NETCFG_VERSION;
+  memcpy(n.ssid,     cfg.ssid,     sizeof(n.ssid));
+  memcpy(n.pass,     cfg.pass,     sizeof(n.pass));
+  memcpy(n.ap_pass,  cfg.ap_pass,  sizeof(n.ap_pass));
+  memcpy(n.hostname, cfg.hostname, sizeof(n.hostname));
+  n.crc = netcfg_crc(&n);
+
+  flash_write_sector(NETCFG_FLASH_OFFSET, &n, sizeof(n));
+  return memcmp(NETCFG_FLASH_ADDR, &n, sizeof(n)) == 0;
+}
+
+static void netcfg_load(void)
+{
+  const network_config *n = (const network_config *)NETCFG_FLASH_ADDR;
+
+  if (n->magic != NETCFG_MAGIC || n->version != NETCFG_VERSION ||
+      n->crc != netcfg_crc(n))
+    return;                       /* nothing stored; defaults stand */
+
+  memcpy(cfg.ssid,     n->ssid,     sizeof(cfg.ssid));
+  memcpy(cfg.pass,     n->pass,     sizeof(cfg.pass));
+  memcpy(cfg.ap_pass,  n->ap_pass,  sizeof(cfg.ap_pass));
+  memcpy(cfg.hostname, n->hostname, sizeof(cfg.hostname));
+  cfg.ssid[CONFIG_SSID_LEN - 1]  = '\0';
+  cfg.pass[CONFIG_PASS_LEN - 1]  = '\0';
+  cfg.ap_pass[CONFIG_PASS_LEN - 1] = '\0';
+  cfg.hostname[CONFIG_NAME_LEN - 1] = '\0';
 }
 
 void config_defaults(void)
@@ -95,6 +168,12 @@ void config_defaults(void)
   cfg.pulse_advance_us   = 40000u;
   cfg.pulse_retard_us    = 40000u;
   cfg.pulse_authority_ns = 0;     /* unknown until "authority" is run      */
+
+  cfg.chime_interval_min = 60u;   /* on the hour                        */
+  cfg.chime_offset_ms    = 0;
+  cfg.chime_latency_ms   = 0u;    /* no silent fudge; see chime.h        */
+  cfg.chime_ref_utc      = 0u;
+  cfg.chime_valid        = 0u;
 
   cfg.control_enabled = 0u;       /* never runs until it is switched on    */
   cfg.kp_swings       = 4200u;    /* one hour of swings                  */
@@ -144,17 +223,18 @@ void config_load(void)
 
   if (f->magic == CONFIG_MAGIC && f->version == CONFIG_VERSION &&
       f->crc == config_crc(f))
-  {
     memcpy(&cfg, f, sizeof(cfg));
-    return;
-  }
-  config_defaults();
+  else
+    config_defaults();
+
+  /* Overlaid afterwards either way, so a layout change to the settings
+     above does not cost the device its network. */
+  netcfg_load();
 }
 
 bool config_save(void)
 {
-  static uint8_t page[FLASH_SECTOR_SIZE];
-  uint32_t ints;
+  bool ok;
 
   if (sizeof(cfg) > FLASH_SECTOR_SIZE) return false;
 
@@ -162,16 +242,8 @@ bool config_save(void)
   cfg.version = CONFIG_VERSION;
   cfg.crc     = config_crc(&cfg);
 
-  memset(page, 0xFF, sizeof(page));
-  memcpy(page, &cfg, sizeof(cfg));
+  flash_write_sector(CONFIG_FLASH_OFFSET, &cfg, sizeof(cfg));
+  ok = memcmp(CONFIG_FLASH_ADDR, &cfg, sizeof(cfg)) == 0;
 
-  /* Erase and program must not be interrupted by anything that executes
-     from flash, and on a Pico W the cyw43 background handler does exactly
-     that.  Mask interrupts across the whole operation. */
-  ints = save_and_disable_interrupts();
-  flash_range_erase(CONFIG_FLASH_OFFSET, FLASH_SECTOR_SIZE);
-  flash_range_program(CONFIG_FLASH_OFFSET, page, FLASH_SECTOR_SIZE);
-  restore_interrupts(ints);
-
-  return memcmp(CONFIG_FLASH_ADDR, &cfg, sizeof(cfg)) == 0;
+  return config_save_network() && ok;
 }

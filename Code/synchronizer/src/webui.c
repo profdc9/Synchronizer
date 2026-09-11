@@ -31,6 +31,7 @@
 #include "timebase.h"
 #include "netclock.h"
 #include "control.h"
+#include "chime.h"
 #include "cli.h"
 #include "httpd.h"
 #include "webui.h"
@@ -182,12 +183,12 @@ static uint32_t json_status(char *b, uint32_t n)
   u += (uint32_t)snprintf(b + u, n - u,
     "\"time\":{\"net\":\"%s\",\"ip\":\"%s\",\"ok\":%lu,\"fail\":%lu,"
       "\"rtt\":%lu,\"have\":%d,\"unix\":%llu,\"ppb\":%ld,\"fixes\":%lu,"
-      "\"offset_us\":%lld},",
+      "\"offset_us\":%lld,\"tz\":%ld},",
     net_status_name(), net_ip(), (unsigned long)net_ntp_ok(),
     (unsigned long)net_ntp_fail(), (unsigned long)net_last_rtt_us(),
     tb_have_time() ? 1 : 0, (unsigned long long)(tb_utc_ns() / 1000000000ull),
     (long)tb_ppb(), (unsigned long)tb_fix_count(),
-    (long long)(tb_last_offset_ns() / 1000));
+    (long long)(tb_last_offset_ns() / 1000), (long)(cfg.tz_offset_s / 60));
 
   u += (uint32_t)snprintf(b + u, n - u,
     "\"loop\":{\"state\":\"%s\",\"on\":%d,\"events\":%llu,\"missed\":%lu,"
@@ -201,6 +202,19 @@ static uint32_t json_status(char *b, uint32_t n)
     (long long)cs.drift_ppb, (long long)(cs.target_offset_ns / 1000000),
     (unsigned long)cfg.kp_swings, (unsigned long)cfg.ki_swings,
     (long)cfg.slew_limit_ppm);
+
+  {
+    uint32_t away = 0, face = 0, real = 0;
+    bool nxt = chime_next(&away, &face, &real);
+    u += (uint32_t)snprintf(b + u, n - u,
+      "\"chime\":{\"have\":%d,\"offset_ms\":%ld,\"interval\":%lu,"
+        "\"latency\":%lu,\"next\":%d,\"away\":%lu,\"face_sod\":%lu,"
+        "\"true_sod\":%lu,\"sod\":%lu},",
+      chime_have() ? 1 : 0, (long)chime_offset_ms(),
+      (unsigned long)cfg.chime_interval_min, (unsigned long)cfg.chime_latency_ms,
+      nxt ? 1 : 0, (unsigned long)away, (unsigned long)face,
+      (unsigned long)real, (unsigned long)chime_local_sod());
+  }
 
   u += (uint32_t)snprintf(b + u, n - u,
     "\"res\":{\"valid\":%d,\"sat\":%d,\"f0\":%lu,\"lo\":%lu,\"hi\":%lu,"
@@ -292,6 +306,14 @@ static bool apply_config(const char *q)
   if (set_u32(q, "kp",     &t, 1u, 1000000u))  { cfg.kp_swings = t;              touched = true; }
   if (set_u32(q, "ki",     &t, 1u, 1000000u))  { cfg.ki_swings = t;              touched = true; }
   if (set_u32(q, "slew",   &t, 1u, 100000u))   { cfg.slew_limit_ppm = (int32_t)t;    touched = true; }
+  if (set_u32(q, "cint",   &t, 1u, 720u))      { cfg.chime_interval_min = t;      touched = true; }
+  {
+    char v[16];
+    if (http_query_get(q, "tz", v, sizeof(v)))
+    { long mins = strtol(v, NULL, 10);
+      if (mins >= -840 && mins <= 840) { cfg.tz_offset_s = (int32_t)(mins * 60); touched = true; } }
+  }
+  if (set_u32(q, "clat",   &t, 0u, 5000u))     { cfg.chime_latency_ms = t;        touched = true; }
   {
     char v[24];
     if (http_query_get(q, "auth", v, sizeof(v)))
@@ -415,6 +437,23 @@ void http_dispatch(const char *method, const char *path, const char *query,
     return;
   }
 
+  if (post && strcmp(path, "/api/chime") == 0)
+  {
+    long h = http_query_int(query, "h", -1);
+    long m = http_query_int(query, "m", 0);
+
+    if (h < 0 || h > 23 || m < 0 || m > 59)
+    { reply_lit(out, 400, "application/json", "{\"ok\":false,\"err\":\"bad time\"}"); return; }
+
+    if (!chime_mark((uint32_t)h, (uint32_t)m))
+    { reply_lit(out, 503, "application/json",
+                "{\"ok\":false,\"err\":\"no time yet\"}"); return; }
+
+    if (http_query_int(query, "apply", 0)) chime_apply_to_loop();
+    reply_lit(out, 200, "application/json", "{\"ok\":true}");
+    return;
+  }
+
   if (post && strcmp(path, "/api/config") == 0)
   {
     bool ok = apply_config(query);
@@ -449,6 +488,10 @@ void http_dispatch(const char *method, const char *path, const char *query,
       net_ap_force(http_query_int(query, "on", 1) != 0);
     else if (strcmp(act, "resetloop") == 0)
       control_reset();
+    else if (strcmp(act, "chimeapply") == 0)
+      chime_apply_to_loop();
+    else if (strcmp(act, "chimeforget") == 0)
+      chime_forget();
     else if (strcmp(act, "measure") == 0)
     {
       if (!control_measure_authority((uint32_t)http_query_int(query, "n", 20),

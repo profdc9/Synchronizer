@@ -29,6 +29,10 @@ button.p{background:var(--acc);border-color:var(--acc);color:#fff}
 button.p:hover{opacity:.88;color:#fff}
 button:disabled{opacity:.45;cursor:default}
 canvas{width:100%;height:130px;display:block;margin-top:9px;border:1px solid var(--line);border-radius:3px}
+button.big{padding:13px 18px;font-size:15px;font-weight:600;flex:1}
+.big-row{display:flex;gap:8px;margin-top:12px}
+.lead{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:22px;
+font-variant-numeric:tabular-nums;letter-spacing:-.02em;margin:2px 0 1px}
 pre{margin:10px 0 0;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:3px;
 font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.4;
 white-space:pre;overflow:auto;max-height:340px;min-height:44px}
@@ -62,7 +66,7 @@ white-space:pre;overflow:auto;max-height:340px;min-height:44px}
 <button onclick="cfg('kp,ki,slew')">Apply</button></div>
 <div class="row"><label>offset ms</label><input id="offms" value="0">
 <button onclick="act('offset&ms='+v('offms'))">Walk hands</button></div>
-<div class="note">Positive offset makes the hands read later. The loop slews there at the rate limit; it never jumps.</div>
+<div class="note">A positive offset holds the hands <em>back</em> &mdash; use it when the clock is running ahead. The loop slews there at the rate limit; it never jumps.</div>
 </section>
 
 <section><h2>Clock</h2>
@@ -85,6 +89,30 @@ white-space:pre;overflow:auto;max-height:340px;min-height:44px}
 <label style="min-width:40px">offset</label><input id="ppt" style="width:62px">
 <button onclick="cfg('epp,ppt')">Apply</button></div>
 <div class="note">Offset is parts per thousand of a full period from a sense event to the bob reaching the drive coil.</div>
+</section>
+
+<section><h2>Chime</h2>
+<p class="note" style="margin:0 0 10px">Set the hour the clock is about to strike, then press the button the
+moment you hear it. That is what tells the device where the hands actually are.</p>
+<div class="row"><label>about to strike</label>
+<input id="ch" style="width:52px" placeholder="3">:<input id="cm" style="width:52px" value="00">
+<span class="note" style="margin:0">clock face, 1&ndash;12 is fine</span></div>
+<div class="big-row"><button class="p big" onclick="heard()">Heard it &mdash; now</button></div>
+<table style="margin-top:12px">
+<tr><td class="k">hands are</td><td class="v"><span id="choff">not measured</span></td></tr>
+<tr><td class="k">next chime</td><td class="v"><span id="chnext">-</span></td></tr>
+<tr><td class="k">it will strike</td><td class="v"><span id="chface">-</span></td></tr>
+<tr><td class="k">at true time</td><td class="v"><span id="chtrue">-</span></td></tr>
+</table>
+<div class="row"><button onclick="act('chimeapply')">Let the loop correct it</button>
+<button onclick="act('chimeforget')">Forget</button></div>
+<div class="row"><label>every</label><input id="cint" style="width:52px">
+<span class="note" style="margin:0">min</span>
+<label style="min-width:74px">press delay</label><input id="clat" style="width:56px">
+<span class="note" style="margin:0">ms</span>
+<button onclick="cfg('cint,clat')">Apply</button></div>
+<div class="note">Pressing trails the sound by a few hundred milliseconds. The allowance is added back;
+leave it at 0 unless you want to correct for your own reaction.</div>
 </section>
 
 <section><h2>Sense</h2>
@@ -140,9 +168,12 @@ white-space:pre;overflow:auto;max-height:340px;min-height:44px}
 </table>
 <div class="row"><label>hostname</label><input id="host">
 <button onclick="cfg('host')">Apply</button></div>
+<div class="row"><label>UTC offset</label><input id="tz" style="width:62px">
+<span class="note" style="margin:0">minutes, e.g. &minus;300 for UTC&minus;5</span>
+<button onclick="cfg('tz')">Apply</button></div>
 <div class="row"><button onclick="act('sync')">Sync now</button>
 <button onclick="if(confirm('Raise the setup access point? This drops the Wi-Fi connection.'))act('ap&on=1')">Setup AP</button></div>
-<div class="note">Credentials are only accepted over the device's own setup network, never from here. Use <code>WIFI ssid,pass</code> on the serial console, or raise the setup access point.</div>
+<div class="note">Credentials are only accepted over the device's own setup network, never from here. Use <code>WIFI ssid pass</code> on the serial console, or raise the setup access point.</div>
 </section>
 
 <section><h2>Configuration</h2>
@@ -158,7 +189,7 @@ white-space:pre;overflow:auto;max-height:340px;min-height:44px}
 
 <section class="wide"><h2>Console</h2>
 <p class="note" style="margin:0 0 9px">The same command line as the serial console — same parser,
-same commands. <code>HELP</code> lists them. Output also goes to the serial port, so a command run
+same commands. <code>HELP</code> lists them. Arguments are separated by spaces; quote any containing one. Output also goes to the serial port, so a command run
 from here is visible to anyone watching it.</p>
 <div class="cli">
 <input id="cmd" list="cmds" placeholder="STATUS" autocapitalize="none" autocorrect="off"
@@ -166,9 +197,9 @@ from here is visible to anyone watching it.</p>
 <button class="p" id="runbtn" onclick="run()">Run</button></div>
 <datalist id="cmds">
 <option value="HELP"><option value="STATUS"><option value="TIME">
-<option value="RESONANCE 2000,80000,Y"><option value="SWEEP 5000,60000,250">
-<option value="CAPTURE 200000,256"><option value="WATCH Y"><option value="WATCH N">
-<option value="MEASURE 20,Y"><option value="CONTROL Y"><option value="CONTROL N">
+<option value="RESONANCE 2000 80000 Y"><option value="SWEEP 5000 60000 250">
+<option value="CAPTURE 200000 256"><option value="WATCH Y"><option value="WATCH N">
+<option value="MEASURE 20 Y"><option value="CONTROL Y"><option value="CONTROL N">
 <option value="PULSE 2000"><option value="COILOFF"><option value="SAVE">
 </datalist>
 <pre id="out">Nothing run yet.</pre>
@@ -202,6 +233,18 @@ function cliDone(){
  fetch('/api/cli').then(function(r){return r.text()}).then(function(t){
   $('out').textContent=t.replace(/\r/g,'')||'(no output)';
   $('out').scrollTop=0;cliwait=false;$('runbtn').disabled=false})}
+
+function hhmm(s){if(s===null||s===undefined)return '-';
+ var h=Math.floor(s/3600),m=Math.floor(s/60)%60,x=s%60;
+ return (h<10?'0':'')+h+':'+(m<10?'0':'')+m+':'+(x<10?'0':'')+x}
+
+function heard(){
+ var h=parseInt($('ch').value,10),m=parseInt($('cm').value,10)||0;
+ if(isNaN(h)){say2('Enter the hour it is about to strike.');return}
+ post('/api/chime?h='+h+'&m='+m).then(function(d){
+  if(d&&d.ok===false)say2(d.err||'refused');
+  poll()})}
+function say2(t){$('choff').textContent=t}
 
 function scan(){if(scanning)return;scanning=true;$('scanbtn').disabled=true;
  post('/api/action?do=resonance&lo='+v('rlo')+'&hi='+v('rhi'))}
@@ -266,9 +309,23 @@ function poll(){fetch('/api/status').then(function(r){return r.json()}).then(fun
  t('dbud',num(D.budget));
  fld('pw',D.pw);fld('adv',D.adv);fld('ret',D.ret);fld('auth',D.auth);
 
+ var C2=d.chime;
+ if(C2.have){var o=C2.offset_ms/1000;
+  t('choff',(Math.abs(o)).toFixed(2)+' s '+(o>=0?'FAST':'slow'));
+  $('choff').className=Math.abs(o)<2?'ok':'';
+  if(C2.next){var a=C2.away;
+   t('chnext',Math.floor(a/60)+'m '+(a%60)+'s');
+   t('chface',hhmm(C2.face_sod));t('chtrue',hhmm(C2.true_sod));}
+  else {t('chnext','-');t('chface','-');t('chtrue','-')}}
+ else {t('choff','not measured');t('chnext','-');t('chface','-');t('chtrue','-')}
+ fld('cint',C2.interval);fld('clat',C2.latency);
+ if(document.activeElement!==$('ch')&&C2.sod<86400){
+  var nh=(Math.floor(C2.sod/3600)+1)%24; if($('ch').value==='')$('ch').value=nh%12||12}
+
  var T=d.time;t('tnet',T.net);t('tntp',T.ok+' ok, '+T.fail+' failed');
  t('trtt',num(T.rtt));t('tunix',T.have?num(T.unix):'not set');
  t('thost',d.host+'.local'+(d.mdns?'':' (not advertised)'));fld('host',d.host);
+ fld('tz',T.tz);
  t('tppb',(T.ppb>0?'+':'')+T.ppb+' ('+T.fixes+' fixes)');t('toff',num(T.offset_us));
 
  fld('rearm',N.pct[0]);fld('minb',N.pct[1]);fld('maxb',N.pct[2]);

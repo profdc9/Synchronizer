@@ -58,7 +58,7 @@ measured. A fresh board will sit there sensing and telling you what it sees.
 near it** — not the bob, not your hand, not a steel rule on the bench:
 
 ```
-RESONANCE 2000,80000,Y
+RESONANCE 2000 80000 Y
 ```
 
 Two passes. A coarse scan locates the peak and gauges its width, then a fine
@@ -99,8 +99,8 @@ run `RESONANCE`, note the peak amplitude, then hold the bob at its closest
 approach and read `STATUS` at the peak and at each flank. Take whichever
 gives the biggest swing.
 
-`SWEEP 5000,60000,250` still prints a raw table if you want to look at the
-whole band by hand, and `CAPTURE 200000,512` dumps the amplified waveform
+`SWEEP 5000 60000 250` still prints a raw table if you want to look at the
+whole band by hand, and `CAPTURE 200000 512` dumps the amplified waveform
 from ADC1 so you can see what the LM358 is actually producing.
 
 **2. Watch the bob.** Put the coil behind the clock and:
@@ -118,7 +118,7 @@ swing interval against nominal.
 **3. Get time.** 
 
 ```
-WIFI myssid,mypassword
+WIFI myssid mypassword
 SAVE
 ```
 
@@ -141,7 +141,7 @@ about 11 s/day fast, from the audio measurement.
 already know:
 
 ```
-MEASURE 20,Y
+MEASURE 20 Y
 ```
 
 It fires one retard pulse per swing for 20 swings, subtracts the natural
@@ -196,7 +196,7 @@ Three things to know:
   `/api/status` and fetches the output. `RESONANCE` alone blocks for three
   seconds, which an HTTP handler must not do.
 - **Output is capped at about 4 kB** and marked `[output truncated]` past
-  that. `CAPTURE 200000,256` and a full `SWEEP` both fit; larger dumps want
+  that. `CAPTURE 200000 256` and a full `SWEEP` both fit; larger dumps want
   the serial console.
 - **`WIFI` and `APKEY` are refused here.** Credentials are deliberately
   settable only over the setup access point, and letting the console set
@@ -306,10 +306,10 @@ version, so changing the structure in a future build restores defaults
 rather than reading a stale layout.
 
 ```
-BPH      8400,2     beats per hour, and beats per full swing
-GEOMETRY 1,500      sense events per swing, drive coil offset
-WINDOWS  35,2,60    detector windows, as % of the event interval
-LOCK     12,4       events needed to lock, gap tolerance %
+BPH      8400 2     beats per hour, and beats per full swing
+GEOMETRY 1 500      sense events per swing, drive coil offset
+WINDOWS  35 2 60    detector windows, as % of the event interval
+LOCK     12 4       events needed to lock, gap tolerance %
 SAMPLE   1000       envelope sampling rate
 TANK     23400      tank drive frequency (RESONANCE finds this)
 ```
@@ -322,9 +322,9 @@ differ from this build:
 
 | Sense coil | Drive coil | Command |
 |---|---|---|
-| at a swing extreme | at the other extreme | `GEOMETRY 1,500` |
-| at a swing extreme | at the same extreme | `GEOMETRY 1,0` |
-| at the swing centre | at an extreme | `GEOMETRY 2,250` |
+| at a swing extreme | at the other extreme | `GEOMETRY 1 500` |
+| at a swing extreme | at the same extreme | `GEOMETRY 1 0` |
+| at the swing centre | at an extreme | `GEOMETRY 2 250` |
 
 A coil at an extreme sees the bob once per full period; one at the centre
 sees it twice. The offset is how long after a sense event the bob reaches
