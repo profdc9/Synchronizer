@@ -340,3 +340,179 @@ void sense_capture(uint32_t rate_hz, uint32_t count)
     printf("%lu%s", (unsigned long)(buf[i] & 0x0FFFu), ((i % 16u) == 15u) ? "\r\n" : " ");
   if ((count % 16u) != 0u) printf("\r\n");
 }
+
+/* --- resonance calibration --------------------------------------------- */
+
+#define SCAN_MAX      96u
+#define COARSE_STEPS  56u
+#define FINE_STEPS    48u
+#define ADC_FULL      4095u
+#define ADC_SAT       4000u       /* above this the envelope is clipping */
+
+static uint32_t scan_hz[SCAN_MAX];
+static uint16_t scan_adc[SCAN_MAX];
+
+/* Park the drive at hz, let the envelope detector settle, and average. */
+static uint16_t measure_at(uint32_t hz, uint32_t dwell_ms)
+{
+  uint32_t acc = 0, i;
+  tank_apply(hz);
+  sleep_ms(dwell_ms);
+  adc_select_input(ADC_CH_AMPLITUDE);
+  for (i = 0; i < 64u; i++) { acc += adc_read(); sleep_us(40); }
+  return (uint16_t)(acc / 64u);
+}
+
+static uint32_t run_scan(uint32_t lo, uint32_t hi, uint32_t steps,
+                         uint32_t dwell_ms, uint32_t *peak_idx)
+{
+  uint32_t i, best = 0;
+  if (steps > SCAN_MAX) steps = SCAN_MAX;
+  if (steps < 3u) steps = 3u;
+  for (i = 0; i < steps; i++)
+  {
+    scan_hz[i]  = lo + ((hi - lo) * i) / (steps - 1u);
+    scan_adc[i] = measure_at(scan_hz[i], dwell_ms);
+    if (scan_adc[i] > scan_adc[best]) best = i;
+  }
+  *peak_idx = best;
+  return steps;
+}
+
+/* Linear interpolation of the frequency at which the curve crosses `level`,
+   walking outward from the peak.  Returns 0 if it never crosses. */
+static uint32_t cross_freq(uint32_t n, uint32_t peak, uint16_t level, int dir)
+{
+  int32_t i = (int32_t)peak;
+  for (;;)
+  {
+    int32_t j = i + dir;
+    if (j < 0 || j >= (int32_t)n) return 0u;
+    if (scan_adc[j] <= level)
+    {
+      int32_t num = (int32_t)scan_adc[i] - (int32_t)level;
+      int32_t den = (int32_t)scan_adc[i] - (int32_t)scan_adc[j];
+      int32_t df  = (int32_t)scan_hz[j] - (int32_t)scan_hz[i];
+      if (den <= 0) return scan_hz[j];
+      return (uint32_t)((int32_t)scan_hz[i] + (df * num) / den);
+    }
+    i = j;
+  }
+}
+
+static void plot_scan(uint32_t n, uint16_t floor_adc, uint16_t peak_adc)
+{
+  uint32_t i;
+  int32_t  span = (int32_t)peak_adc - (int32_t)floor_adc;
+
+  if (span < 1) span = 1;
+  printf("      hz    adc\r\n");
+  for (i = 0; i < n; i++)
+  {
+    int32_t v = ((int32_t)scan_adc[i] - (int32_t)floor_adc) * 46 / span;
+    int32_t k;
+    if (v < 0) v = 0;
+    if (v > 46) v = 46;
+    printf("%8lu %6u |", (unsigned long)scan_hz[i], scan_adc[i]);
+    for (k = 0; k < v; k++) putchar('#');
+    printf("\r\n");
+  }
+}
+
+bool sense_find_resonance(uint32_t lo, uint32_t hi, bool plot, sense_resonance *out)
+{
+  uint32_t n, peak, i;
+  uint16_t floor_adc, half;
+  uint32_t w_lo, w_hi, width, flo, fhi;
+  bool     was = running;
+
+  memset(out, '\0', sizeof(*out));
+  if (hi <= lo || (hi - lo) < 100u) { printf("bad range\r\n"); return false; }
+
+  running = false;              /* the detector must not run during a scan */
+
+  /* --- coarse: where is it, and roughly how wide? --- */
+  printf("coarse scan %lu..%lu hz\r\n", (unsigned long)lo, (unsigned long)hi);
+  n = run_scan(lo, hi, COARSE_STEPS, 20u, &peak);
+
+  floor_adc = scan_adc[0];
+  for (i = 0; i < n; i++) if (scan_adc[i] < floor_adc) floor_adc = scan_adc[i];
+
+  if (peak == 0u || peak == n - 1u) out->edge = true;
+
+  half  = (uint16_t)(floor_adc + (((uint32_t)scan_adc[peak] - floor_adc) * 707u) / 1000u);
+  w_lo  = cross_freq(n, peak, half, -1);
+  w_hi  = cross_freq(n, peak, half, +1);
+  width = (w_lo && w_hi) ? (w_hi - w_lo) : ((hi - lo) / 8u);
+  if (width < 100u) width = 100u;
+
+  /* --- fine: three linewidths centred on the coarse peak --- */
+  {
+    uint32_t c  = scan_hz[peak];
+    uint32_t fl = (c > width + width / 2u) ? (c - width - width / 2u) : 100u;
+    uint32_t fh = c + width + width / 2u;
+    if (fl < lo) fl = lo;
+    if (fh > hi) fh = hi;
+    if (fh <= fl + 100u) { fl = lo; fh = hi; }
+    printf("fine scan %lu..%lu hz\r\n", (unsigned long)fl, (unsigned long)fh);
+    n = run_scan(fl, fh, FINE_STEPS, 30u, &peak);
+  }
+
+  for (i = 0; i < n; i++) if (scan_adc[i] < floor_adc) floor_adc = scan_adc[i];
+  out->floor_adc = floor_adc;
+  out->peak_adc  = scan_adc[peak];
+  out->saturated = scan_adc[peak] >= ADC_SAT;
+
+  if (plot) plot_scan(n, floor_adc, scan_adc[peak]);
+
+  /* --- parabolic interpolation of the peak --- */
+  out->f0_hz = scan_hz[peak];
+  if (peak > 0u && peak < n - 1u && !out->saturated)
+  {
+    int32_t y0 = scan_adc[peak - 1], y1 = scan_adc[peak], y2 = scan_adc[peak + 1];
+    int32_t den = y0 - 2 * y1 + y2;
+    if (den != 0)
+    {
+      int32_t step = (int32_t)scan_hz[peak + 1] - (int32_t)scan_hz[peak];
+      /* offset = 0.5 * (y0 - y2) / den, in units of one step */
+      int32_t off = (step * (y0 - y2)) / (2 * den);
+      if (off > step)  off =  step;
+      if (off < -step) off = -step;
+      out->f0_hz = (uint32_t)((int32_t)scan_hz[peak] + off);
+    }
+  }
+
+  /* --- half-power points and Q --- */
+  half = (uint16_t)(floor_adc + (((uint32_t)scan_adc[peak] - floor_adc) * 707u) / 1000u);
+  flo  = cross_freq(n, peak, half, -1);
+  fhi  = cross_freq(n, peak, half, +1);
+  out->f_lo_hz = flo;
+  out->f_hi_hz = fhi;
+  if (flo && fhi && fhi > flo)
+    out->q_x10 = (uint32_t)(((uint64_t)out->f0_hz * 10ull) / (uint64_t)(fhi - flo));
+
+  out->valid = (scan_adc[peak] > floor_adc + 40u);
+
+  /* --- adopt it, but only if the result is worth believing ---
+
+     A clipped peak is flat on top, so the parabolic fit slides off it and
+     the half-power points sit on the wrong part of the curve.  On the
+     synthetic test a railed scan came back 302 Hz off with Q wrong by half.
+     Better to keep the old frequency and say so than to quietly adopt a
+     bad one and save it. */
+  if (out->valid && !out->saturated)
+  {
+    tank_apply(out->f0_hz);
+    cfg.tank_hz        = tank_hz;
+    cfg.tank_f0_hz     = out->f0_hz;
+    cfg.tank_q_x10     = out->q_x10;
+    cfg.tank_peak_adc  = out->peak_adc;
+    cfg.tank_floor_adc = out->floor_adc;
+  }
+  else
+    tank_apply(cfg.tank_hz);        /* put it back where it was */
+
+  baseline_q = 0;
+  running    = was;
+  return out->valid && !out->saturated;
+}

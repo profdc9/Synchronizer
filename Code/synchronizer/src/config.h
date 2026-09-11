@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  1u
+#define CONFIG_VERSION  2u
 
 #define CONFIG_SSID_LEN 33
 #define CONFIG_PASS_LEN 65
@@ -50,6 +50,14 @@ typedef struct _synchronizer_config
   uint16_t detect_threshold;    /* ADC counts below/above baseline       */
   uint8_t  detect_falling;      /* 1 if the bob makes amplitude DROP     */
   uint8_t  sense_enabled;
+
+  /* What RESONANCE last measured, with nothing metallic near the coil.
+     Kept so STATUS can show how far the drive has been detuned from the
+     peak on purpose, and so a later scan can be compared with this one. */
+  uint32_t tank_f0_hz;          /* peak of the resonance curve           */
+  uint32_t tank_q_x10;          /* f0 / -3 dB bandwidth, times ten       */
+  uint16_t tank_peak_adc;       /* envelope reading at the peak          */
+  uint16_t tank_floor_adc;      /* envelope reading far off resonance    */
 
   /* --- drive ------------------------------------------------------ */
   uint16_t pulse_us;            /* width of one correction pulse         */

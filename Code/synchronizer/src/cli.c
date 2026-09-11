@@ -73,6 +73,14 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   printf("\r\n-- sense ------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "state", sense_enabled() ? "running" : "stopped");
   printf("%-22s %lu hz\r\n", "tank drive", (unsigned long)sense_tank_hz());
+  if (cfg.tank_f0_hz)
+    printf("%-22s %lu hz, Q %lu.%lu, peak %u over %u  (drive is %+ld hz off)\r\n",
+           "tank resonance", (unsigned long)cfg.tank_f0_hz,
+           (unsigned long)(cfg.tank_q_x10 / 10u), (unsigned long)(cfg.tank_q_x10 % 10u),
+           cfg.tank_peak_adc, cfg.tank_floor_adc,
+           (long)((int32_t)sense_tank_hz() - (int32_t)cfg.tank_f0_hz));
+  else
+    printf("%-22s not calibrated - run RESONANCE\r\n", "tank resonance");
   printf("%-22s %u (last sample %u, threshold %u, %s)\r\n", "baseline",
          sense_baseline(), sense_last_sample(), cfg.detect_threshold,
          cfg.detect_falling ? "falling" : "rising");
@@ -140,6 +148,54 @@ static int capture_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
   sense_capture((uint32_t)tp[0].ti.i, (uint32_t)tp[1].ti.i);
+  return 1;
+}
+
+static int resonance_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  sense_resonance r;
+  uint32_t lo = (uint32_t)tp[0].ti.i, hi = (uint32_t)tp[1].ti.i;
+
+  (void)args; (void)v;
+  if (lo == 0u) lo = 2000u;
+  if (hi == 0u) hi = 80000u;
+
+  printf("keep metal away from the sense coil - the bob, your hand, tools\r\n");
+  sense_find_resonance(lo, hi, tp[2].tb.b, &r);
+
+  printf("\r\npeak            %lu hz\r\n", (unsigned long)r.f0_hz);
+  printf("amplitude       %u counts (floor %u, rise %u)\r\n",
+         r.peak_adc, r.floor_adc, (unsigned)(r.peak_adc - r.floor_adc));
+  if (r.f_lo_hz && r.f_hi_hz)
+  {
+    printf("-3 dB points    %lu .. %lu hz, bandwidth %lu hz\r\n",
+           (unsigned long)r.f_lo_hz, (unsigned long)r.f_hi_hz,
+           (unsigned long)(r.f_hi_hz - r.f_lo_hz));
+    printf("Q               %lu.%lu\r\n",
+           (unsigned long)(r.q_x10 / 10u), (unsigned long)(r.q_x10 % 10u));
+    printf("steepest flanks %lu and %lu hz  (try these if the bob barely moves\r\n"
+           "                the amplitude at the peak)\r\n",
+           (unsigned long)(r.f0_hz - ((r.f_hi_hz - r.f_lo_hz) * 354u) / 1000u),
+           (unsigned long)(r.f0_hz + ((r.f_hi_hz - r.f_lo_hz) * 354u) / 1000u));
+  }
+  else
+    printf("-3 dB points    not found inside the scan - widen the range\r\n");
+
+  if (r.saturated)
+    printf("WARNING: the envelope railed at %u counts.  The peak is clipped and\r\n"
+           "         both the frequency and Q are unreliable.  Reduce the drive\r\n"
+           "         or the amplifier gain and scan again.\r\n", r.peak_adc);
+  if (r.edge)
+    printf("WARNING: the peak sat at the edge of the scan - widen the range.\r\n");
+  if (!r.valid)
+    printf("WARNING: no clear peak.  Check the coil is on J3 and C3 is fitted.\r\n");
+
+  if (r.valid && !r.saturated)
+    printf("\r\ndrive now at %lu hz - 'save' to keep it\r\n",
+           (unsigned long)sense_tank_hz());
+  else
+    printf("\r\nresult not adopted; drive left at %lu hz\r\n",
+           (unsigned long)sense_tank_hz());
   return 1;
 }
 
@@ -344,7 +400,8 @@ static const tinycl_command tcmds[] =
 {
   { "HELP",     "this list",                              help_cmd,     {TINYCL_PARM_END} },
   { "STATUS",   "everything the device knows",            status_cmd,   {TINYCL_PARM_END} },
-  { "SWEEP",    "from,to,step hz - find resonance",       sweep_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "RESONANCE","lo,hi,plot(y|n) - calibrate the tank",   resonance_cmd,{TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
+  { "SWEEP",    "from,to,step hz - raw table",            sweep_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "CAPTURE",  "rate_hz,count - raw tank waveform",      capture_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "TANK",     "hz - set tank drive frequency",          tank_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "SENSE",    "y|n - detector",                      sense_cmd,    {TINYCL_PARM_BOOL, TINYCL_PARM_END} },

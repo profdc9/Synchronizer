@@ -80,9 +80,37 @@ uint64_t sense_mean_interval_us(uint32_t n);
 /* --- bring-up tools ---------------------------------------------------- */
 
 /* Step the drive frequency across a range, averaging ADC0 at each step, and
-   print a table.  This is how the tank's resonance is found. */
+   print a table.  Manual inspection; sense_find_resonance does the real
+   calibration. */
 void sense_sweep(uint32_t from_hz, uint32_t to_hz, uint32_t step_hz,
                  uint32_t dwell_ms);
+
+/* What a resonance scan found. */
+typedef struct _sense_resonance
+{
+  bool     valid;
+  bool     saturated;      /* the envelope railed - readings are clipped  */
+  bool     edge;           /* the peak sat at the edge of the search span */
+  uint32_t f0_hz;          /* peak, parabolically interpolated            */
+  uint32_t f_lo_hz;        /* lower half-power point                      */
+  uint32_t f_hi_hz;        /* upper half-power point                      */
+  uint32_t q_x10;          /* f0 / (f_hi - f_lo), times ten               */
+  uint16_t peak_adc;
+  uint16_t floor_adc;      /* envelope reading far off resonance          */
+} sense_resonance;
+
+/* Find the sense tank's resonance.  Run this with nothing metallic near
+   the coil - the bob, a hand, a steel ruler will all pull it.
+
+   Two passes: a coarse scan across the whole span to locate the peak and
+   gauge its width, then a fine scan over about three linewidths centred on
+   it.  The peak frequency comes from a parabolic fit to the three points
+   around the fine maximum, so it is not limited to the step size, and the
+   half-power points come from linear interpolation across the fine scan.
+
+   Leaves the drive at the frequency it found and records it in cfg. */
+bool sense_find_resonance(uint32_t lo_hz, uint32_t hi_hz, bool plot,
+                          sense_resonance *out);
 
 /* Capture the raw amplified tank waveform on ADC1 and print it. */
 void sense_capture(uint32_t rate_hz, uint32_t count);

@@ -49,22 +49,54 @@ measured. A fresh board will sit there sensing and telling you what it sees.
 
 ## Bring-up, in order
 
-**1. Find the tank's resonance.** With the sense coil connected to J3:
+**1. Calibrate the tank.** With the sense coil on J3 and **nothing metallic
+near it** — not the bob, not your hand, not a steel rule on the bench:
 
 ```
-SWEEP 5000,60000,250
+RESONANCE 2000,80000,Y
 ```
 
-It steps the drive frequency and prints the envelope reading at each step.
-The tank's resonance is where the amplitude peaks. Narrow in, then:
+Two passes. A coarse scan locates the peak and gauges its width, then a fine
+scan covers about three linewidths centred on it. The peak frequency comes
+from a parabolic fit to the three points around the fine maximum, so it is
+not limited to the step size; the half-power points come from linear
+interpolation across the fine scan. The trailing `Y` prints the curve as a
+bar chart.
 
-```
-TANK 23400
-SAVE
-```
+It reports the peak, the −3 dB points, Q, and the two steepest flanks, then
+adopts the peak. `SAVE` keeps it.
 
-`CAPTURE 200000,512` dumps the raw amplified waveform from ADC1 if you want
-to see what the LM358 is actually producing.
+On a synthetic resonance the peak comes back within a few hertz — well under
+one scan step — for Q anywhere from 12 to 120 and across the whole band. Q
+itself is good to about 1% at moderate Q and drifts low by roughly 10% on a
+very sharp tank, where the fine scan's step size limits how precisely the
+flanks can be located.
+
+Two things to watch for, both of which the command warns about:
+
+- **Clipping.** If the envelope rails, the peak goes flat, the parabola
+  slides off it and Q collapses. On the synthetic test a railed scan came
+  back 302 Hz out with Q wrong by half. The command refuses to adopt a
+  clipped result and leaves the drive where it was.
+- **Harmonics.** The drive is a square wave, so a scan that passes through
+  f0/3 and f0/5 will show smaller responses there too. The fundamental
+  always wins, but do not be surprised by the subpeaks in the plot.
+
+**Should you sit exactly on the peak?** Not necessarily. At the peak the
+amplitude is stationary, so pure detuning by the bob only moves it to
+*second* order. On the steepest flank — about 0.354 bandwidths either side of
+centre, which is what the command prints — detuning moves it to first order,
+which can be far more sensitive. Against that, the bob also *loads* the tank
+through eddy-current loss, and that lowers the peak to first order even at
+centre. Which mechanism dominates depends on your coil, your frequency and
+how much brass versus steel the bob presents, so it is worth trying both:
+run `RESONANCE`, note the peak amplitude, then hold the bob at its closest
+approach and read `STATUS` at the peak and at each flank. Take whichever
+gives the biggest swing.
+
+`SWEEP 5000,60000,250` still prints a raw table if you want to look at the
+whole band by hand, and `CAPTURE 200000,512` dumps the amplified waveform
+from ADC1 so you can see what the LM358 is actually producing.
 
 **2. Watch the bob.** Put the coil behind the clock and:
 

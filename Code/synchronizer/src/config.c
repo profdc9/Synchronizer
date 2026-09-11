@@ -63,6 +63,10 @@ void config_defaults(void)
      so there is no meaningful default - "sweep" finds it and "save" keeps
      it.  20 kHz is only a starting point for the first sweep. */
   cfg.tank_hz          = 20000u;
+  cfg.tank_f0_hz       = 0u;      /* nothing measured yet                */
+  cfg.tank_q_x10       = 0u;
+  cfg.tank_peak_adc    = 0u;
+  cfg.tank_floor_adc   = 0u;
   cfg.detect_threshold = 200u;
   cfg.detect_falling   = 1u;     /* detuning the tank lowers its impedance */
   cfg.sense_enabled    = 1u;
