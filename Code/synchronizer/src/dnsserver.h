@@ -1,4 +1,4 @@
-/* webui.h - the browser interface served from the Pico W */
+/* dnsserver.h - answer every lookup with our own address */
 
 /*
    Copyright (c) 2026 Daniel Marks
@@ -20,35 +20,29 @@
   3. This notice may not be removed or altered from any source distribution.
 */
 
-#ifndef _WEBUI_H
-#define _WEBUI_H
+#ifndef _DNSSERVER_H
+#define _DNSSERVER_H
 
 #include <stdbool.h>
-#include <stdint.h>
+#include "lwip/ip_addr.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* A resonance scan takes about three seconds and an authority measurement
-   runs for tens of swings.  Neither can happen inside an HTTP handler, so
-   a request only queues the job; web_poll() runs it from the main loop and
-   the page watches "job" in the status for it to finish. */
+/* Phones decide whether a network has working internet by fetching a known
+   URL.  Pointing every name at ourselves makes that check land on the
+   provisioning page, which is what pops the "sign in to network" sheet
+   instead of leaving the user to guess an IP address.
 
-void web_init(void);
-void web_poll(void);
-bool web_busy(void);
-const char *web_job_name(void);
+   Only used while the provisioning AP is up. */
 
-/* The pages, in flash.  web_setup is the provisioning form served while
-   the device is being its own access point. */
-extern const char web_page[];
-extern const uint32_t web_page_len;
-extern const char web_setup[];
-extern const uint32_t web_setup_len;
+void dnsserver_start(const ip4_addr_t *ours);
+void dnsserver_stop(void);
+bool dnsserver_running(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* _WEBUI_H */
+#endif /* _DNSSERVER_H */

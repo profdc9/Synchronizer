@@ -1,0 +1,68 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Synchronizer setup</title><style>
+:root{--bg:#f5f6f7;--fg:#14161a;--dim:#5b636b;--line:#dde1e5;--card:#fff;--acc:#2a78d6;--ok:#1b7f4b;--warn:#c8521f}
+@media(prefers-color-scheme:dark){:root{--bg:#15171a;--fg:#eef1f4;--dim:#98a0a8;--line:#2a2f35;--card:#1c1f23;--acc:#5c9ded;--ok:#4bbd82;--warn:#e07a45}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.w{max-width:440px;margin:0 auto;padding:26px 18px 60px}
+h1{font-size:21px;margin:0 0 4px}
+p.s{color:var(--dim);font-size:14px;margin:0 0 22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:18px}
+label{display:block;font-size:13px;color:var(--dim);margin:14px 0 5px}
+label:first-child{margin-top:0}
+input,select{width:100%;padding:11px 10px;border:1px solid var(--line);border-radius:4px;
+background:var(--bg);color:var(--fg);font-size:16px}
+button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:4px;background:var(--acc);
+color:#fff;font-size:16px;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5}
+button.alt{background:transparent;color:var(--acc);border:1px solid var(--line);
+font-weight:400;font-size:14px;margin-top:9px;padding:9px}
+#msg{margin-top:16px;font-size:14px;min-height:20px}
+.ok{color:var(--ok)}.bad{color:var(--warn)}
+.n{color:var(--dim);font-size:12.5px;margin-top:20px;line-height:1.55}
+</style></head><body><div class="w">
+<h1>Synchronizer setup</h1>
+<p class="s">Tell the clock which Wi-Fi network to join. It needs this to get the time.</p>
+<div class="card">
+<label for="pick">Network</label>
+<select id="pick" onchange="pick()"><option value="">Scanning&hellip;</option></select>
+<label for="ssid">Network name</label>
+<input id="ssid" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Your Wi-Fi name">
+<label for="pass">Password</label>
+<input id="pass" type="password" autocapitalize="none" autocorrect="off" spellcheck="false">
+<button id="go" onclick="save()">Connect</button>
+<button class="alt" onclick="rescan()">Scan again</button>
+<div id="msg"></div>
+</div>
+<p class="n">The device restarts its network connection when you press Connect, so
+this page will stop responding and the setup network will disappear. If the details
+were right, the clock joins your network and its own page moves there. If they were
+wrong, it raises this setup network again after a few tries.</p>
+</div>
+<script>
+function $(i){return document.getElementById(i)}
+function pick(){var v=$('pick').value;if(v)$('ssid').value=v}
+function say(t,c){var m=$('msg');m.textContent=t;m.className=c||''}
+function list(){fetch('/api/scanwifi').then(function(r){return r.json()}).then(function(d){
+ var s=$('pick');s.innerHTML='';
+ var o=document.createElement('option');o.value='';
+ o.textContent=d.busy?'Scanning…':(d.n?'Choose a network…':'None found — type it below');
+ s.appendChild(o);
+ for(var i=0;i<d.n;i++){var e=document.createElement('option');
+  e.value=d.ssid[i];e.textContent=d.ssid[i]+'  ('+d.rssi[i]+' dBm)';s.appendChild(e)}
+ if(d.busy)setTimeout(list,1200)})
+ .catch(function(){say('Could not reach the device.','bad')})}
+function rescan(){say('');fetch('/api/action?do=scanwifi',{method:'POST'}).then(function(){
+ setTimeout(list,600)})}
+function save(){
+ var s=$('ssid').value.trim();
+ if(!s){say('Enter a network name.','bad');return}
+ $('go').disabled=true;say('Saving and connecting…');
+ fetch('/api/wifi?ssid='+encodeURIComponent(s)+'&pass='+encodeURIComponent($('pass').value),
+  {method:'POST'}).then(function(r){return r.json()}).then(function(d){
+   if(d.ok)say('Saved. Rejoin your own Wi-Fi and look for the clock there.','ok');
+   else{say('The device would not accept that.','bad');$('go').disabled=false}})
+  .catch(function(){say('Saved — the setup network has gone, which is expected.','ok')})}
+list();
+</script></body></html>

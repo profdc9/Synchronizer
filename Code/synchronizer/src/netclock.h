@@ -35,8 +35,11 @@ typedef enum
   NET_OFF = 0,
   NET_CONNECTING,
   NET_ONLINE,
+  NET_AP,          /* raising the provisioning access point */
   NET_FAILED
 } net_state;
+
+#define NET_SCAN_MAX 16
 
 void        net_init(void);
 void        net_poll(void);
@@ -48,6 +51,31 @@ uint32_t    net_ntp_ok(void);
 uint32_t    net_ntp_fail(void);
 uint32_t    net_last_rtt_us(void);
 void        net_reconnect(void);        /* after credentials change */
+
+/* --- provisioning ------------------------------------------------------
+
+   With no stored credentials - or after repeatedly failing to use the ones
+   it has, which is what a mistyped password looks like - the device raises
+   its own access point and serves the setup page on it.  Joining that
+   network and opening any page reaches the form.  Nothing else is needed:
+   no serial terminal, no app. */
+
+bool        net_in_ap(void);
+const char *net_ap_ssid(void);          /* includes the board's unique id */
+
+/* Accept credentials and go try them.  Refused unless the AP is up, so a
+   stranger on your LAN cannot repoint the device at their network. */
+bool        net_provision(const char *ssid, const char *pass);
+
+void        net_ap_force(bool on);      /* raise or drop the AP by hand */
+
+/* Best-effort list of nearby networks, to save typing an SSID on a phone.
+   Scanning is not always possible while the AP is up, so an empty list is
+   normal and the setup page always offers a plain text field. */
+void        net_scan_start(void);
+bool        net_scan_busy(void);
+uint32_t    net_scan_count(void);
+bool        net_scan_get(uint32_t i, const char **ssid, int16_t *rssi);
 
 #ifdef __cplusplus
 }

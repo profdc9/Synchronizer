@@ -172,8 +172,7 @@ Once the board associates, it serves a page on port 80 at the address
 the clock and coil geometry, the detector, the drive coil, the loop, and a
 resonance scan that draws its own curve.
 
-The serial CLI keeps working alongside it, and remains the only way to set
-Wi-Fi credentials — they are never served or accepted over the network.
+The serial CLI keeps working alongside it.
 
 Two things shape the design:
 
@@ -202,6 +201,39 @@ network can energise the drive coil. The pulse ceiling, the watchdog and the
 duty bucket in `drive.c` bound what that can do to the hardware, but they
 are not a security boundary — put this on a network you trust, or keep it to
 the serial console.
+
+## First-time setup, with no serial terminal
+
+A board that has never been told a network raises **its own access point**
+instead, and so does one that has failed to connect three times running —
+which is what a mistyped password looks like from the inside. There is no
+way to get locked out.
+
+1. Join the Wi-Fi network **`Synchronizer-XXXX`** (the last two bytes of the
+   board's unique ID). The key is **`synchronizer`**, changeable with
+   `APKEY`.
+2. Open any page. The device runs a DHCP server so your phone gets an
+   address, and answers every DNS lookup with its own, so the captive-portal
+   check fails and the setup form opens by itself. If it does not, go to
+   **192.168.4.1**.
+3. Pick your network from the list, or type it — scanning is best effort
+   while the AP is up, so an empty list is normal and the text field always
+   works.
+4. Press Connect. Credentials are saved to flash, the AP drops and the
+   device joins your network. Its page moves there.
+
+`AP Y` raises the access point by hand, `AP N` drops it, and the main page
+has a button for it too.
+
+**Credentials are only accepted over that access point.** `net_provision()`
+refuses otherwise, so nobody on your LAN can repoint the device at their own
+network — they would have to be in radio range and raise the AP first.
+
+The key on the setup AP is not much of a secret; it is written above. Its
+job is to stop your home Wi-Fi password crossing an open link in the clear
+while you type it in. Anyone within radio range who knows the default could
+provision an unconfigured board, so change it with `APKEY` if that matters
+where the clock lives.
 
 ## Setting it up for a different clock
 

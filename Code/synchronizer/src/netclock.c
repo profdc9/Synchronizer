@@ -24,12 +24,15 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
+#include "pico/unique_id.h"
 #include "lwip/udp.h"
 #include "lwip/dns.h"
 #include "lwip/ip_addr.h"
 #include "config.h"
 #include "timebase.h"
 #include "netclock.h"
+#include "dhcpserver.h"
+#include "dnsserver.h"
 
 #define NTP_PORT            123
 #define NTP_MSG_LEN         48
@@ -45,6 +48,10 @@
 #define CONNECT_TIMEOUT_MS  20000
 #define NTP_TIMEOUT_MS      4000
 
+/* Three failures in a row is what a mistyped password looks like.  Raise
+   the provisioning AP rather than retrying forever with no way in. */
+#define STA_FAILS_TO_AP     3
+
 static net_state    state = NET_OFF;
 static struct udp_pcb *pcb;
 static ip_addr_t    server_ip;
@@ -57,6 +64,16 @@ static uint32_t     ok_count, fail_count, last_rtt;
 static absolute_time_t next_poll, wait_deadline, retry_at;
 static char         ipbuf[20];
 static bool         force_sync;
+
+static uint32_t     sta_fails;
+static bool         ap_up, ap_forced;
+static char         ap_ssid[33];
+static ip4_addr_t   ap_ip, ap_mask;
+
+static char         scan_ssid[NET_SCAN_MAX][33];
+static int16_t      scan_rssi[NET_SCAN_MAX];
+static uint32_t     scan_count;
+static bool         scan_running;
 
 /* --- NTP ------------------------------------------------------------- */
 
@@ -128,6 +145,124 @@ static void ntp_send(void)
   wait_deadline = make_timeout_time_ms(NTP_TIMEOUT_MS);
 }
 
+/* --- scanning ---------------------------------------------------------- */
+
+static int scan_cb(void *env, const cyw43_ev_scan_result_t *r)
+{
+  uint32_t i;
+  (void)env;
+
+  if (!r || r->ssid_len == 0u) return 0;
+  for (i = 0; i < scan_count; i++)
+    if (strncmp(scan_ssid[i], (const char *)r->ssid, r->ssid_len) == 0) return 0;
+  if (scan_count >= NET_SCAN_MAX) return 0;
+
+  memcpy(scan_ssid[scan_count], r->ssid,
+         (r->ssid_len > 32u) ? 32u : r->ssid_len);
+  scan_ssid[scan_count][(r->ssid_len > 32u) ? 32u : r->ssid_len] = '\0';
+  scan_rssi[scan_count] = r->rssi;
+  scan_count++;
+  return 0;
+}
+
+void net_scan_start(void)
+{
+  cyw43_wifi_scan_options_t opts;
+  memset(&opts, 0, sizeof(opts));
+  scan_count = 0;
+  cyw43_arch_lwip_begin();
+  if (cyw43_wifi_scan(&cyw43_state, &opts, NULL, scan_cb) == 0) scan_running = true;
+  cyw43_arch_lwip_end();
+}
+
+bool net_scan_busy(void)
+{
+  if (scan_running && !cyw43_wifi_scan_active(&cyw43_state)) scan_running = false;
+  return scan_running;
+}
+
+uint32_t net_scan_count(void) { return scan_count; }
+
+bool net_scan_get(uint32_t i, const char **ssid, int16_t *rssi)
+{
+  if (i >= scan_count) return false;
+  *ssid = scan_ssid[i];
+  *rssi = scan_rssi[i];
+  return true;
+}
+
+/* --- the provisioning access point -------------------------------------- */
+
+const char *net_ap_ssid(void)
+{
+  if (ap_ssid[0] == '\0')
+  {
+    pico_unique_board_id_t id;
+    pico_get_unique_board_id(&id);
+    snprintf(ap_ssid, sizeof(ap_ssid), "Synchronizer-%02X%02X",
+             id.id[6], id.id[7]);
+  }
+  return ap_ssid;
+}
+
+bool net_in_ap(void) { return ap_up; }
+
+static void ap_start(void)
+{
+  if (ap_up) return;
+
+  IP4_ADDR(&ap_ip,   192, 168, 4, 1);
+  IP4_ADDR(&ap_mask, 255, 255, 255, 0);
+
+  cyw43_arch_enable_ap_mode(net_ap_ssid(), cfg.ap_pass[0] ? cfg.ap_pass : "synchronizer",
+                            CYW43_AUTH_WPA2_AES_PSK);
+
+  cyw43_arch_lwip_begin();
+  netif_set_addr(&cyw43_state.netif[CYW43_ITF_AP], &ap_ip, &ap_mask, &ap_ip);
+  cyw43_arch_lwip_end();
+
+  dhcpserver_start(&ap_ip, &ap_mask);
+  dnsserver_start(&ap_ip);
+
+  ap_up = true;
+  state = NET_AP;
+  net_scan_start();          /* best effort; an empty list is fine */
+}
+
+static void ap_stop(void)
+{
+  if (!ap_up) return;
+  dnsserver_stop();
+  dhcpserver_stop();
+  cyw43_arch_disable_ap_mode();
+  ap_up = false;
+}
+
+void net_ap_force(bool on)
+{
+  ap_forced = on;
+  if (on) { ap_start(); }
+  else    { ap_stop(); state = NET_OFF; retry_at = get_absolute_time(); sta_fails = 0; }
+}
+
+bool net_provision(const char *ssid, const char *pass)
+{
+  if (!ap_up) return false;              /* AP only - never from your LAN */
+  if (!ssid || ssid[0] == '\0') return false;
+
+  strncpy(cfg.ssid, ssid, CONFIG_SSID_LEN - 1); cfg.ssid[CONFIG_SSID_LEN - 1] = '\0';
+  strncpy(cfg.pass, pass ? pass : "", CONFIG_PASS_LEN - 1); cfg.pass[CONFIG_PASS_LEN - 1] = '\0';
+  config_save();
+
+  ap_forced = false;
+  sta_fails = 0;
+  ap_stop();
+  state       = NET_OFF;
+  have_server = false;
+  retry_at    = get_absolute_time();
+  return true;
+}
+
 /* --- public ---------------------------------------------------------- */
 
 void net_init(void)
@@ -148,12 +283,19 @@ void net_init(void)
   next_poll  = get_absolute_time();
   retry_at   = get_absolute_time();
   ok_count = fail_count = 0;
+  sta_fails  = 0;
+
+  /* A board that has never been told a network comes up as its own. */
+  if (cfg.ssid[0] == '\0') ap_start();
 }
 
 void net_reconnect(void)
 {
-  state    = NET_OFF;
-  retry_at = get_absolute_time();
+  ap_stop();
+  ap_forced   = false;
+  sta_fails   = 0;
+  state       = NET_OFF;
+  retry_at    = get_absolute_time();
   have_server = false;
 }
 
@@ -162,7 +304,14 @@ void net_request_sync(void) { force_sync = true; }
 void net_poll(void)
 {
   if (state == NET_FAILED) return;
-  if (cfg.ssid[0] == '\0') return;
+
+  if (ap_up)
+  {
+    (void)net_scan_busy();          /* let a finished scan settle */
+    return;                         /* no NTP while we are the network */
+  }
+
+  if (cfg.ssid[0] == '\0') { ap_start(); return; }
 
   if (state == NET_OFF)
   {
@@ -172,10 +321,14 @@ void net_poll(void)
                                            CYW43_AUTH_WPA2_AES_PSK,
                                            CONNECT_TIMEOUT_MS))
     {
-      state    = NET_OFF;
+      state = NET_OFF;
+      /* Credentials that never work would otherwise retry forever with no
+         way for anyone to correct them. */
+      if (++sta_fails >= STA_FAILS_TO_AP) { ap_start(); return; }
       retry_at = make_timeout_time_ms(15000);
       return;
     }
+    sta_fails = 0;
     state     = NET_ONLINE;
     next_poll = get_absolute_time();
     return;
@@ -234,6 +387,7 @@ const char *net_status_name(void)
     case NET_OFF:        return cfg.ssid[0] ? "offline" : "no ssid";
     case NET_CONNECTING: return "connecting";
     case NET_ONLINE:     return "online";
+    case NET_AP:         return "setup ap";
     case NET_FAILED:     return "failed";
   }
   return "?";
@@ -241,6 +395,7 @@ const char *net_status_name(void)
 
 const char *net_ip(void)
 {
+  if (ap_up) return "192.168.4.1";
   if (state != NET_ONLINE) return "-";
   snprintf(ipbuf, sizeof(ipbuf), "%s",
            ip4addr_ntoa(netif_ip4_addr(netif_list)));

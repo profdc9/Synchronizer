@@ -102,6 +102,7 @@ void config_defaults(void)
   cfg.slew_limit_ppm  = 500;      /* 0.43 ms per swing, a hard ceiling   */
 
   strncpy(cfg.ntp_host, "pool.ntp.org", CONFIG_HOST_LEN - 1);
+  strncpy(cfg.ap_pass, "synchronizer", CONFIG_PASS_LEN - 1);
   cfg.tz_offset_s = 0;
   cfg.xtal_ppb    = 0;
 }

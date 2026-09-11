@@ -107,6 +107,9 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("\r\n-- time -------------------------------------------------\r\n");
   printf("%-22s %s  %s\r\n", "network", net_status_name(), net_ip());
+  if (net_in_ap())
+    printf("%-22s \"%s\", key \"%s\", page at 192.168.4.1\r\n",
+           "setup ap", net_ap_ssid(), cfg.ap_pass);
   printf("%-22s %lu ok, %lu failed, last rtt %lu us\r\n", "ntp",
          (unsigned long)net_ntp_ok(), (unsigned long)net_ntp_fail(),
          (unsigned long)net_last_rtt_us());
@@ -431,6 +434,28 @@ static int ntp_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+static int ap_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  net_ap_force(tp[0].tb.b);
+  if (tp[0].tb.b)
+    printf("access point \"%s\" up, key \"%s\", page at 192.168.4.1\r\n",
+           net_ap_ssid(), cfg.ap_pass);
+  else
+    printf("access point down\r\n");
+  return 1;
+}
+
+static int apkey_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  strncpy(cfg.ap_pass, tp[0].ts.str, CONFIG_PASS_LEN - 1);
+  cfg.ap_pass[CONFIG_PASS_LEN - 1] = '\0';
+  printf("setup ap key set (%u characters) - 'save' to keep it\r\n",
+         (unsigned)strlen(cfg.ap_pass));
+  return 1;
+}
+
 static int sync_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)tp; (void)v;
@@ -496,6 +521,8 @@ static const tinycl_command tcmds[] =
   { "WIFI",     "ssid,password",                          wifi_cmd,     {TINYCL_PARM_STR, TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "NTP",      "hostname",                               ntp_cmd,      {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "SYNC",     "ask for an NTP exchange now",            sync_cmd,     {TINYCL_PARM_END} },
+  { "AP",       "y|n - raise the setup access point",     ap_cmd,       {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
+  { "APKEY",    "password for the setup access point",    apkey_cmd,    {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "SAVE",     "write configuration to flash",           save_cmd,     {TINYCL_PARM_END} },
   { "DEFAULTS", "load defaults into ram",                 defaults_cmd, {TINYCL_PARM_END} },
   { "BOOTSEL",  "reboot into the uf2 bootloader",         bootsel_cmd,  {TINYCL_PARM_END} },

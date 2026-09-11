@@ -159,12 +159,41 @@ static uint32_t json_status(char *b, uint32_t n)
   u += (uint32_t)snprintf(b + u, n - u,
     "\"res\":{\"valid\":%d,\"sat\":%d,\"f0\":%lu,\"lo\":%lu,\"hi\":%lu,"
       "\"q10\":%lu,\"peak\":%u,\"floor\":%u},"
-    "\"ssid\":\"%s\",\"ntp\":\"%s\"}",
+    "\"ssid\":\"%s\",\"ntp\":\"%s\",\"ap\":%d,\"apssid\":\"%s\"}",
     r->valid ? 1 : 0, r->saturated ? 1 : 0, (unsigned long)r->f0_hz,
     (unsigned long)r->f_lo_hz, (unsigned long)r->f_hi_hz,
     (unsigned long)r->q_x10, r->peak_adc, r->floor_adc,
-    cfg.ssid, cfg.ntp_host);
+    cfg.ssid, cfg.ntp_host, net_in_ap() ? 1 : 0, net_ap_ssid());
 
+  return (u < n) ? u : (n - 1u);
+}
+
+static uint32_t json_wifi(char *b, uint32_t n)
+{
+  uint32_t i, cnt = net_scan_count(), u = 0;
+  const char *ss; int16_t rssi;
+
+  u += (uint32_t)snprintf(b + u, n - u, "{\"busy\":%s,\"n\":%lu,\"ssid\":[",
+                          net_scan_busy() ? "true" : "false", (unsigned long)cnt);
+  for (i = 0; i < cnt && u < n - 64u; i++)
+  {
+    net_scan_get(i, &ss, &rssi);
+    /* SSIDs are arbitrary bytes; emit only what is safe inside a JSON
+       string and drop the rest rather than producing invalid JSON. */
+    u += (uint32_t)snprintf(b + u, n - u, "%s\"", i ? "," : "");
+    while (*ss && u < n - 8u)
+    {
+      unsigned char ch = (unsigned char)*ss++;
+      if (ch == '"' || ch == '\\') b[u++] = '\\', b[u++] = (char)ch;
+      else if (ch >= 0x20u && ch < 0x7Fu) b[u++] = (char)ch;
+    }
+    u += (uint32_t)snprintf(b + u, n - u, "\"");
+  }
+  u += (uint32_t)snprintf(b + u, n - u, "],\"rssi\":[");
+  for (i = 0; i < cnt && u < n - 16u; i++)
+  { net_scan_get(i, &ss, &rssi);
+    u += (uint32_t)snprintf(b + u, n - u, "%s%d", i ? "," : "", rssi); }
+  u += (uint32_t)snprintf(b + u, n - u, "]}");
   return (u < n) ? u : (n - 1u);
 }
 
@@ -244,7 +273,31 @@ void http_dispatch(const char *method, const char *path, const char *query,
 
   if (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0)
   {
-    reply(out, 200, "text/html; charset=utf-8", web_page, web_page_len);
+    if (net_in_ap())
+      reply(out, 200, "text/html; charset=utf-8", web_setup, web_setup_len);
+    else
+      reply(out, 200, "text/html; charset=utf-8", web_page, web_page_len);
+    return;
+  }
+
+  if (strcmp(path, "/api/scanwifi") == 0)
+  {
+    reply(out, 200, "application/json", scratch, json_wifi(scratch, scratch_len));
+    return;
+  }
+
+  if (post && strcmp(path, "/api/wifi") == 0)
+  {
+    char ssid[CONFIG_SSID_LEN], pass[CONFIG_PASS_LEN];
+    if (!http_query_get(query, "ssid", ssid, sizeof(ssid)))
+    { reply(out, 400, "application/json", "{\"ok\":false}", 12u); return; }
+    if (!http_query_get(query, "pass", pass, sizeof(pass))) pass[0] = '\0';
+    /* net_provision refuses unless the AP is up, so credentials can only
+       be set from the device's own network, never from your LAN. */
+    if (net_provision(ssid, pass))
+      reply(out, 200, "application/json", "{\"ok\":true}", 11u);
+    else
+      reply(out, 403, "application/json", "{\"ok\":false}", 12u);
     return;
   }
 
@@ -287,6 +340,10 @@ void http_dispatch(const char *method, const char *path, const char *query,
       control_set_offset_ns((int64_t)http_query_int(query, "ms", 0) * 1000000ll);
     else if (strcmp(act, "sync") == 0)
       net_request_sync();
+    else if (strcmp(act, "scanwifi") == 0)
+      net_scan_start();
+    else if (strcmp(act, "ap") == 0)
+      net_ap_force(http_query_int(query, "on", 1) != 0);
     else if (strcmp(act, "resetloop") == 0)
       control_reset();
     else if (strcmp(act, "measure") == 0)
@@ -321,6 +378,16 @@ void http_dispatch(const char *method, const char *path, const char *query,
     { reply(out, 400, "application/json", "{\"err\":\"unknown\"}", 17u); return; }
 
     reply(out, 200, "application/json", "{\"ok\":true}", 11u);
+    return;
+  }
+
+  /* A phone decides a network needs signing in to by fetching a known URL
+     and checking what comes back.  While the AP is up, answer every one of
+     them with the setup page so that check fails and the portal opens,
+     instead of leaving someone to guess an address. */
+  if (net_in_ap() && !post)
+  {
+    reply(out, 200, "text/html; charset=utf-8", web_setup, web_setup_len);
     return;
   }
 

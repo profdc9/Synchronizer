@@ -1,4 +1,4 @@
-/* webui.h - the browser interface served from the Pico W */
+/* dhcpserver.h - the minimum DHCP server the provisioning AP needs */
 
 /*
    Copyright (c) 2026 Daniel Marks
@@ -20,35 +20,32 @@
   3. This notice may not be removed or altered from any source distribution.
 */
 
-#ifndef _WEBUI_H
-#define _WEBUI_H
+#ifndef _DHCPSERVER_H
+#define _DHCPSERVER_H
 
-#include <stdbool.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include "lwip/ip_addr.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* A resonance scan takes about three seconds and an authority measurement
-   runs for tens of swings.  Neither can happen inside an HTTP handler, so
-   a request only queues the job; web_poll() runs it from the main loop and
-   the page watches "job" in the status for it to finish. */
+/* A phone that joins the provisioning access point will not ask nicely for
+   an address - it expects DHCP, and without it the browser never gets far
+   enough to load the page.  This is just enough of a server to hand out a
+   handful of leases on the AP subnet: DISCOVER/OFFER, REQUEST/ACK, and
+   RELEASE.  Nothing else. */
 
-void web_init(void);
-void web_poll(void);
-bool web_busy(void);
-const char *web_job_name(void);
+#define DHCP_LEASES  8
 
-/* The pages, in flash.  web_setup is the provisioning form served while
-   the device is being its own access point. */
-extern const char web_page[];
-extern const uint32_t web_page_len;
-extern const char web_setup[];
-extern const uint32_t web_setup_len;
+void dhcpserver_start(const ip4_addr_t *gateway, const ip4_addr_t *mask);
+void dhcpserver_stop(void);
+bool dhcpserver_running(void);
+uint32_t dhcpserver_leases(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* _WEBUI_H */
+#endif /* _DHCPSERVER_H */

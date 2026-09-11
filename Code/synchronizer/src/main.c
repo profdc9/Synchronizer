@@ -84,7 +84,8 @@ int main(void)
     /* The listener can only be created once lwIP has an interface, and
        long jobs queued by the browser run here rather than inside an
        HTTP callback. */
-    if (!httpd_running() && net_status() == NET_ONLINE) httpd_init(80);
+    if (!httpd_running() && (net_status() == NET_ONLINE || net_in_ap()))
+      httpd_init(80);
     web_poll();
 
     /* threadsafe_background does the lwIP work in the background, but this

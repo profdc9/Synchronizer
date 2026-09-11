@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  3u
+#define CONFIG_VERSION  4u
 
 #define CONFIG_SSID_LEN 33
 #define CONFIG_PASS_LEN 65
@@ -112,6 +112,12 @@ typedef struct _synchronizer_config
   char     ssid[CONFIG_SSID_LEN];
   char     pass[CONFIG_PASS_LEN];
   char     ntp_host[CONFIG_HOST_LEN];
+
+  /* Key for the provisioning access point the device raises when it has no
+     credentials, or cannot use the ones it has.  It is not a secret worth
+     much - it is printed in the README - but it does keep your home Wi-Fi
+     password from crossing an open link in the clear while you type it in. */
+  char     ap_pass[CONFIG_PASS_LEN];
   int32_t  tz_offset_s;         /* for display only; discipline is UTC   */
 
   /* --- learned ---------------------------------------------------- */

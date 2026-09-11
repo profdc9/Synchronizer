@@ -132,8 +132,9 @@ canvas{width:100%;height:130px;display:block;margin-top:9px;border:1px solid var
 <tr><td class="k">crystal</td><td class="v"><span id="tppb">-</span> ppb</td></tr>
 <tr><td class="k">last offset</td><td class="v"><span id="toff">-</span> us</td></tr>
 </table>
-<div class="row"><button onclick="act('sync')">Sync now</button></div>
-<div class="note">Wi-Fi credentials are set over the serial console with <code>WIFI ssid,pass</code>; they are never served over the network.</div>
+<div class="row"><button onclick="act('sync')">Sync now</button>
+<button onclick="if(confirm('Raise the setup access point? This drops the Wi-Fi connection.'))act('ap&on=1')">Setup AP</button></div>
+<div class="note">Credentials are only accepted over the device's own setup network, never from here. Use <code>WIFI ssid,pass</code> on the serial console, or raise the setup access point.</div>
 </section>
 
 <section><h2>Configuration</h2>

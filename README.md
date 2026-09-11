@@ -57,8 +57,13 @@ and spends it whole: one short pulse every few dozen swings.
 
 ### Keeping time
 
-A Raspberry Pi Pico W runs the whole thing. It gets the time over Wi-Fi by
-NTP, and keeps a model of UTC that NTP corrects in both phase *and* rate —
+A Raspberry Pi Pico W runs the whole thing, and serves a web interface for
+everything else — status, calibration, tuning. Setting one up needs no
+serial terminal and no app: a board with no network raises its own access
+point, and joining it opens the setup form.
+
+It gets the time over Wi-Fi by NTP, and keeps a model of UTC that NTP
+corrects in both phase *and* rate —
 the RP2040's crystal is only good to around 30 ppm, which is 2.6 s/day, a
 sizeable fraction of the error being removed. A GPS receiver can be wired to
 the expansion header later.
