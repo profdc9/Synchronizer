@@ -33,8 +33,49 @@
 #include "timebase.h"
 #include "netclock.h"
 #include "control.h"
+#include "pico/stdio.h"
+#include "pico/stdio/driver.h"
 #include "tinycl.h"
 #include "cli.h"
+
+/* --- capturing what a command prints ------------------------------------
+
+   Registered once, alongside stdio_usb, and inert until cap_on is set.
+   out_chars can be reached from any context, so it does nothing but copy
+   bytes into a caller-supplied buffer. */
+
+static char    *cap_buf;
+static uint32_t cap_sz, cap_len;
+static bool     cap_on, cap_trunc;
+
+static void cap_out_chars(const char *buf, int len)
+{
+  int i;
+  if (!cap_on || !cap_buf) return;
+  for (i = 0; i < len; i++)
+  {
+    if (cap_len + 1u < cap_sz) cap_buf[cap_len++] = buf[i];
+    else cap_trunc = true;
+  }
+}
+
+static stdio_driver_t cap_driver =
+{
+  .out_chars = cap_out_chars,
+};
+
+/* tinycl pulls characters through this hook, so a command can be fed in
+   from anywhere.  Declared in tinycl.c; not in its header. */
+extern int tinycl_rppico_getchar(void *v);
+
+static const char *feed_p;
+
+static int feed_getchar(void *v)
+{
+  (void)v;
+  if (!feed_p || *feed_p == '\0') return -1;
+  return (int)(unsigned char)(*feed_p++);
+}
 
 static void print_ns(const char *label, int64_t ns)
 {
@@ -548,8 +589,45 @@ static int help_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+bool cli_run_captured(const char *cmd, char *out, uint32_t outsz, uint32_t *outlen)
+{
+  char line[TINYCL_COMMAND_BUFFER];
+  bool echo_was = tinycl_do_echo;
+  int  guard;
+
+  *outlen = 0;
+  if (!cmd || !out || outsz < 2u) return false;
+
+  snprintf(line, sizeof(line), "%s\r", cmd);
+
+  cap_buf = out; cap_sz = outsz; cap_len = 0; cap_trunc = false;
+  feed_p = line;
+  tinycl_do_echo = 0;                    /* or the command echoes into itself */
+  tinycl_set_getchar(feed_getchar, NULL);
+  cap_on = true;
+
+  /* One call should consume the whole line; the guard is only in case a
+     command is split across reads. */
+  for (guard = 0; guard < 4 && *feed_p != '\0'; guard++)
+    tinycl_task(sizeof(tcmds) / sizeof(tinycl_command), tcmds, NULL);
+  tinycl_task(sizeof(tcmds) / sizeof(tinycl_command), tcmds, NULL);
+
+  cap_on = false;
+  tinycl_set_getchar(tinycl_rppico_getchar, NULL);
+  tinycl_do_echo = echo_was;
+
+  if (cap_trunc && cap_len + 24u < cap_sz)
+    cap_len += (uint32_t)snprintf(out + cap_len, cap_sz - cap_len,
+                                  "\r\n[output truncated]\r\n");
+  out[cap_len] = '\0';
+  *outlen = cap_len;
+  cap_buf = NULL;
+  return true;
+}
+
 void cli_init(void)
 {
+  stdio_set_driver_enabled(&cap_driver, true);
   tinycl_do_echo = 1;
   printf("\r\nSynchronizer - pendulum clock discipline\r\n");
   printf("type HELP for commands\r\n> ");

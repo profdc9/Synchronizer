@@ -172,7 +172,40 @@ Once the board associates, it serves a page on port 80 at the address
 the clock and coil geometry, the detector, the drive coil, the loop, and a
 resonance scan that draws its own curve.
 
-The serial CLI keeps working alongside it.
+The serial CLI keeps working alongside it — and is also *on* the page: the
+Console card runs the same command line, through the same parser and the
+same command table. There is no second syntax to keep in step.
+
+```sh
+curl -s -X POST 'http://synchronizer.local/api/cli?cmd=STATUS'   # queue it
+curl -s        'http://synchronizer.local/api/cli'               # read the output
+```
+
+The output comes back as plain text, so this is as pleasant from `curl` or a
+script as it is from the browser. It works because the SDK's stdio layer
+fans every `printf` out to all registered drivers: a capture driver sits
+alongside USB and is switched on around the command, so **not one of the
+firmware's `printf` calls had to change**. Output still reaches the serial
+port at the same time, so a command run from a browser is visible to anyone
+watching the wire.
+
+Three things to know:
+
+- **A command runs from the main loop, never in the HTTP handler.** The POST
+  queues it and returns `202`; the page notices the result counter change in
+  `/api/status` and fetches the output. `RESONANCE` alone blocks for three
+  seconds, which an HTTP handler must not do.
+- **Output is capped at about 4 kB** and marked `[output truncated]` past
+  that. `CAPTURE 200000,256` and a full `SWEEP` both fit; larger dumps want
+  the serial console.
+- **`WIFI` and `APKEY` are refused here.** Credentials are deliberately
+  settable only over the setup access point, and letting the console set
+  them from your LAN would quietly undo that. They still work on the serial
+  console.
+
+The USB and web consoles share one `tinycl` command buffer, so typing on the
+serial port at the exact moment a web command runs can garble one of them.
+The result is a rejected command, not a wrong one.
 
 Two things shape the design:
 

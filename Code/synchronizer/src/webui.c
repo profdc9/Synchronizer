@@ -31,10 +31,22 @@
 #include "timebase.h"
 #include "netclock.h"
 #include "control.h"
+#include "cli.h"
 #include "httpd.h"
 #include "webui.h"
 
-typedef enum { JOB_NONE = 0, JOB_RESONANCE, JOB_SAVE } web_job;
+typedef enum { JOB_NONE = 0, JOB_RESONANCE, JOB_SAVE, JOB_CLI } web_job;
+
+/* A console command can print a lot - CAPTURE and SWEEP both run to a few
+   kilobytes - and it runs from the main loop, never from an HTTP handler,
+   because RESONANCE alone blocks for three seconds. */
+#define CLI_OUT_MAX   4000u
+#define CLI_CMD_MAX   128u
+
+static char     cli_cmd[CLI_CMD_MAX];
+static char     cli_out[CLI_OUT_MAX];
+static uint32_t cli_out_len;
+static uint32_t cli_serial;          /* bumped when a result is ready */
 
 static volatile web_job job;
 static uint32_t job_lo, job_hi;
@@ -49,6 +61,7 @@ const char *web_job_name(void)
   {
     case JOB_RESONANCE: return "resonance";
     case JOB_SAVE:      return "save";
+    case JOB_CLI:       return "console";
     default:            return "idle";
   }
 }
@@ -76,6 +89,12 @@ void web_poll(void)
   else if (j == JOB_SAVE)
   {
     snprintf(job_msg, sizeof(job_msg), "%s", config_save() ? "saved" : "SAVE FAILED");
+  }
+  else if (j == JOB_CLI)
+  {
+    cli_run_captured(cli_cmd, cli_out, sizeof(cli_out), &cli_out_len);
+    cli_serial++;
+    snprintf(job_msg, sizeof(job_msg), "ran \"%s\"", cli_cmd);
   }
 
   job = JOB_NONE;
@@ -160,12 +179,12 @@ static uint32_t json_status(char *b, uint32_t n)
     "\"res\":{\"valid\":%d,\"sat\":%d,\"f0\":%lu,\"lo\":%lu,\"hi\":%lu,"
       "\"q10\":%lu,\"peak\":%u,\"floor\":%u},"
     "\"ssid\":\"%s\",\"ntp\":\"%s\",\"ap\":%d,\"apssid\":\"%s\","
-    "\"host\":\"%s\",\"mdns\":%d}",
+    "\"host\":\"%s\",\"mdns\":%d,\"cliseq\":%lu}",
     r->valid ? 1 : 0, r->saturated ? 1 : 0, (unsigned long)r->f0_hz,
     (unsigned long)r->f_lo_hz, (unsigned long)r->f_hi_hz,
     (unsigned long)r->q_x10, r->peak_adc, r->floor_adc,
     cfg.ssid, cfg.ntp_host, net_in_ap() ? 1 : 0, net_ap_ssid(),
-    net_hostname(), net_mdns_active() ? 1 : 0);
+    net_hostname(), net_mdns_active() ? 1 : 0, (unsigned long)cli_serial);
 
   return (u < n) ? u : (n - 1u);
 }
@@ -272,6 +291,12 @@ static bool apply_config(const char *q)
 static void reply(http_response *o, int st, const char *ct, const char *b, uint32_t n)
 { o->status = st; o->ctype = ct; o->body = b; o->len = n; }
 
+/* For constant bodies.  Hand-counting Content-Length is a bug waiting to
+   happen: one byte short truncates the body and the client waits forever
+   for the rest, or parses invalid JSON.  Two of these were already wrong. */
+static void reply_lit(http_response *o, int st, const char *ct, const char *b)
+{ o->status = st; o->ctype = ct; o->body = b; o->len = (uint32_t)strlen(b); }
+
 void http_dispatch(const char *method, const char *path, const char *query,
                    char *scratch, uint32_t scratch_len, http_response *out)
 {
@@ -286,6 +311,54 @@ void http_dispatch(const char *method, const char *path, const char *query,
     return;
   }
 
+  if (strcmp(path, "/api/cli") == 0)
+  {
+    if (!post)
+    {
+      /* Plain text, so this is pleasant from curl as well as the page. */
+      uint32_t n = cli_out_len;
+      if (n > scratch_len - 1u) n = scratch_len - 1u;
+      memcpy(scratch, cli_out, n);
+      scratch[n] = '\0';
+      reply(out, 200, "text/plain; charset=utf-8", scratch, n);
+      return;
+    }
+
+    if (job != JOB_NONE)
+    { reply_lit(out, 503, "text/plain",
+            "busy\r\n"); return; }
+    if (!http_query_get(query, "cmd", cli_cmd, sizeof(cli_cmd)) || cli_cmd[0] == '\0')
+    { reply_lit(out, 400, "text/plain",
+            "no command\r\n"); return; }
+
+    /* Wi-Fi credentials are deliberately settable only over the device's
+       own access point.  Letting the console set them from your LAN would
+       quietly undo that, so those two commands are refused here - they
+       still work on the serial console. */
+    {
+      static const char *const denied[] = { "WIFI", "APKEY" };
+      uint32_t i;
+      for (i = 0; i < sizeof(denied) / sizeof(denied[0]); i++)
+      {
+        uint32_t l = (uint32_t)strlen(denied[i]);
+        if (strncasecmp(cli_cmd, denied[i], l) == 0 &&
+            (cli_cmd[l] == '\0' || cli_cmd[l] == ' '))
+        {
+          reply_lit(out, 403, "text/plain",
+            "refused: set credentials on the serial console, or over the "
+                "setup access point\r\n");
+          return;
+        }
+      }
+    }
+
+    snprintf(job_msg, sizeof(job_msg), "running \"%s\"", cli_cmd);
+    job = JOB_CLI;
+    reply_lit(out, 202, "text/plain",
+            "queued\r\n");
+    return;
+  }
+
   if (strcmp(path, "/api/scanwifi") == 0)
   {
     reply(out, 200, "application/json", scratch, json_wifi(scratch, scratch_len));
@@ -296,14 +369,17 @@ void http_dispatch(const char *method, const char *path, const char *query,
   {
     char ssid[CONFIG_SSID_LEN], pass[CONFIG_PASS_LEN];
     if (!http_query_get(query, "ssid", ssid, sizeof(ssid)))
-    { reply(out, 400, "application/json", "{\"ok\":false}", 12u); return; }
+    { reply_lit(out, 400, "application/json",
+            "{\"ok\":false}"); return; }
     if (!http_query_get(query, "pass", pass, sizeof(pass))) pass[0] = '\0';
     /* net_provision refuses unless the AP is up, so credentials can only
        be set from the device's own network, never from your LAN. */
     if (net_provision(ssid, pass))
-      reply(out, 200, "application/json", "{\"ok\":true}", 11u);
+      reply_lit(out, 200, "application/json",
+            "{\"ok\":true}");
     else
-      reply(out, 403, "application/json", "{\"ok\":false}", 12u);
+      reply_lit(out, 403, "application/json",
+            "{\"ok\":false}");
     return;
   }
 
@@ -331,7 +407,8 @@ void http_dispatch(const char *method, const char *path, const char *query,
   {
     char act[24];
     if (!http_query_get(query, "do", act, sizeof(act)))
-    { reply(out, 400, "application/json", "{\"err\":\"no action\"}", 19u); return; }
+    { reply_lit(out, 400, "application/json",
+            "{\"err\":\"no action\"}"); return; }
 
     if (strcmp(act, "control") == 0)
       control_enable(http_query_int(query, "on", 0) != 0);
@@ -356,34 +433,40 @@ void http_dispatch(const char *method, const char *path, const char *query,
     {
       if (!control_measure_authority((uint32_t)http_query_int(query, "n", 20),
                                      http_query_int(query, "retard", 1) != 0))
-      { reply(out, 503, "application/json",
-              "{\"err\":\"loop must be tracking\"}", 30u); return; }
+      { reply_lit(out, 503, "application/json",
+            "{\"err\":\"loop must be tracking\"}"); return; }
     }
     else if (strcmp(act, "resonance") == 0)
     {
       if (job != JOB_NONE)
-      { reply(out, 503, "application/json", "{\"err\":\"busy\"}", 14u); return; }
+      { reply_lit(out, 503, "application/json",
+            "{\"err\":\"busy\"}"); return; }
       job_lo = (uint32_t)http_query_int(query, "lo", 2000);
       job_hi = (uint32_t)http_query_int(query, "hi", 80000);
       snprintf(job_msg, sizeof(job_msg), "scanning %lu-%lu hz",
                (unsigned long)job_lo, (unsigned long)job_hi);
       job = JOB_RESONANCE;
-      reply(out, 202, "application/json", "{\"ok\":true}", 11u);
+      reply_lit(out, 202, "application/json",
+            "{\"ok\":true}");
       return;
     }
     else if (strcmp(act, "save") == 0)
     {
       if (job != JOB_NONE)
-      { reply(out, 503, "application/json", "{\"err\":\"busy\"}", 14u); return; }
+      { reply_lit(out, 503, "application/json",
+            "{\"err\":\"busy\"}"); return; }
       snprintf(job_msg, sizeof(job_msg), "writing flash");
       job = JOB_SAVE;
-      reply(out, 202, "application/json", "{\"ok\":true}", 11u);
+      reply_lit(out, 202, "application/json",
+            "{\"ok\":true}");
       return;
     }
     else
-    { reply(out, 400, "application/json", "{\"err\":\"unknown\"}", 17u); return; }
+    { reply_lit(out, 400, "application/json",
+            "{\"err\":\"unknown\"}"); return; }
 
-    reply(out, 200, "application/json", "{\"ok\":true}", 11u);
+    reply_lit(out, 200, "application/json",
+            "{\"ok\":true}");
     return;
   }
 
@@ -397,5 +480,6 @@ void http_dispatch(const char *method, const char *path, const char *query,
     return;
   }
 
-  reply(out, 404, "text/plain", "not found", 9u);
+  reply_lit(out, 404, "text/plain",
+            "not found");
 }

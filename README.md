@@ -62,7 +62,9 @@ everything else — status, calibration, tuning. Setting one up needs no
 serial terminal and no app: a board with no network raises its own access
 point, and joining it opens the setup form. Afterwards it answers at
 `synchronizer.local` and advertises itself over DNS-SD, so there is no IP
-address to hunt for.
+address to hunt for. The page carries a console that runs the same command
+line as the serial port, and the same thing is reachable from `curl` for
+scripting or remote debugging.
 
 It gets the time over Wi-Fi by NTP, and keeps a model of UTC that NTP
 corrects in both phase *and* rate —

@@ -23,12 +23,32 @@
 #ifndef _CLI_H
 #define _CLI_H
 
+#include <stdint.h>
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void cli_init(void);
 void cli_poll(void);
+
+/* Run one command line as if it had been typed, and collect whatever it
+   printed.
+
+   The SDK's stdio layer fans every printf out to all registered drivers,
+   so capturing output needs no change to any of the printf calls scattered
+   through the firmware: a capture driver is registered alongside USB and
+   simply switched on around the command.  Output still reaches the serial
+   console at the same time, so a command issued from a browser is visible
+   to anyone watching the wire.
+
+   Injection goes through tinycl's own getchar hook, so the web console and
+   the serial console share one parser and one command table - there is no
+   second syntax to keep in step.
+
+   Returns false if the command was refused; *outlen is always set. */
+bool cli_run_captured(const char *cmd, char *out, uint32_t outsz, uint32_t *outlen);
 
 #ifdef __cplusplus
 }
