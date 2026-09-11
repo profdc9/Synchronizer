@@ -107,6 +107,8 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("\r\n-- time -------------------------------------------------\r\n");
   printf("%-22s %s  %s\r\n", "network", net_status_name(), net_ip());
+  printf("%-22s %s.local%s\r\n", "name", net_hostname(),
+         net_mdns_active() ? "" : "   (not advertised - no interface up)");
   if (net_in_ap())
     printf("%-22s \"%s\", key \"%s\", page at 192.168.4.1\r\n",
            "setup ap", net_ap_ssid(), cfg.ap_pass);
@@ -434,6 +436,16 @@ static int ntp_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+static int hostname_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  if (!net_set_hostname(tp[0].ts.str))
+    printf("that leaves nothing usable as a name\r\n");
+  else
+    printf("now answering to %s.local - 'save' to keep it\r\n", net_hostname());
+  return 1;
+}
+
 static int ap_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
@@ -523,6 +535,7 @@ static const tinycl_command tcmds[] =
   { "SYNC",     "ask for an NTP exchange now",            sync_cmd,     {TINYCL_PARM_END} },
   { "AP",       "y|n - raise the setup access point",     ap_cmd,       {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "APKEY",    "password for the setup access point",    apkey_cmd,    {TINYCL_PARM_STR, TINYCL_PARM_END} },
+  { "HOSTNAME", "name advertised over mdns",              hostname_cmd, {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "SAVE",     "write configuration to flash",           save_cmd,     {TINYCL_PARM_END} },
   { "DEFAULTS", "load defaults into ram",                 defaults_cmd, {TINYCL_PARM_END} },
   { "BOOTSEL",  "reboot into the uf2 bootloader",         bootsel_cmd,  {TINYCL_PARM_END} },

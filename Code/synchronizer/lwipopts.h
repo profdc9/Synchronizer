@@ -5,6 +5,8 @@
 #ifndef _LWIPOPTS_H
 #define _LWIPOPTS_H
 
+#include <stdlib.h>          /* for rand(), which LWIP_RAND needs below */
+
 #define NO_SYS                      1
 #define LWIP_SOCKET                 0
 #define LWIP_NETCONN                0
@@ -24,6 +26,19 @@
 #define TCP_SND_BUF                 (4 * TCP_MSS)
 #define TCP_WND                     (4 * TCP_MSS)
 #define TCP_SND_QUEUELEN            ((4 * TCP_SND_BUF) / TCP_MSS)
+
+/* mDNS needs a random source, multicast group membership, one slot of
+   per-netif client data, and one more system timeout than it would
+   otherwise use.  Miss any of them and mdns.c refuses to compile. */
+#define LWIP_RAND()                 ((u32_t)rand())
+#define LWIP_IGMP                   1
+#define LWIP_NUM_NETIF_CLIENT_DATA  2
+#define MEMP_NUM_SYS_TIMEOUT        (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 1)
+#define LWIP_MDNS_RESPONDER         1
+#define MDNS_MAX_SERVICES           1
+
+/* DHCP server, DNS hijack, NTP client and mDNS each want one. */
+#define MEMP_NUM_UDP_PCB            8
 
 #define LWIP_ARP                    1
 #define LWIP_ETHERNET               1

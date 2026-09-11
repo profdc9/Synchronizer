@@ -159,11 +159,13 @@ static uint32_t json_status(char *b, uint32_t n)
   u += (uint32_t)snprintf(b + u, n - u,
     "\"res\":{\"valid\":%d,\"sat\":%d,\"f0\":%lu,\"lo\":%lu,\"hi\":%lu,"
       "\"q10\":%lu,\"peak\":%u,\"floor\":%u},"
-    "\"ssid\":\"%s\",\"ntp\":\"%s\",\"ap\":%d,\"apssid\":\"%s\"}",
+    "\"ssid\":\"%s\",\"ntp\":\"%s\",\"ap\":%d,\"apssid\":\"%s\","
+    "\"host\":\"%s\",\"mdns\":%d}",
     r->valid ? 1 : 0, r->saturated ? 1 : 0, (unsigned long)r->f0_hz,
     (unsigned long)r->f_lo_hz, (unsigned long)r->f_hi_hz,
     (unsigned long)r->q_x10, r->peak_adc, r->floor_adc,
-    cfg.ssid, cfg.ntp_host, net_in_ap() ? 1 : 0, net_ap_ssid());
+    cfg.ssid, cfg.ntp_host, net_in_ap() ? 1 : 0, net_ap_ssid(),
+    net_hostname(), net_mdns_active() ? 1 : 0);
 
   return (u < n) ? u : (n - 1u);
 }
@@ -255,6 +257,10 @@ static bool apply_config(const char *q)
     char v[24];
     if (http_query_get(q, "auth", v, sizeof(v)))
     { cfg.pulse_authority_ns = (int32_t)strtol(v, NULL, 10); touched = true; }
+  }
+  {
+    char h[CONFIG_NAME_LEN];
+    if (http_query_get(q, "host", h, sizeof(h)) && net_set_hostname(h)) touched = true;
   }
 
   if (reclock) { sense_refresh_timing(); control_init(); }

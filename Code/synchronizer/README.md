@@ -220,10 +220,40 @@ way to get locked out.
    while the AP is up, so an empty list is normal and the text field always
    works.
 4. Press Connect. Credentials are saved to flash, the AP drops and the
-   device joins your network. Its page moves there.
+   device joins your network, where it answers at
+   **http://synchronizer.local**.
 
 `AP Y` raises the access point by hand, `AP N` drops it, and the main page
 has a button for it too.
+
+### Finding it afterwards
+
+An mDNS responder answers for **`<hostname>.local`** — `synchronizer.local`
+by default, changed with `HOSTNAME` or from the page — and advertises the
+web interface as an **`_http._tcp`** service, so it also shows up in service
+browsers (`avahi-browse -rt _http._tcp`, Safari's Bonjour list, Android's
+NSD) without anyone knowing an address. It runs on the setup access point
+too, so even provisioning works by name.
+
+This is a convenience, not a guarantee. `.local` resolves reliably on macOS,
+iOS, Windows 10 and later, and Linux with Avahi; **typing it into a browser
+on Android is unreliable**, though service discovery from an app works
+there. `STATUS` always prints the plain address, and so does your router's
+client list.
+
+Anything typed as a hostname is reduced to a legal DNS label — lower-cased,
+with everything but letters, digits and interior hyphens dropped. The name
+it settled on is echoed back, so `Papa's clock` becoming `papasclock` is
+visible rather than silent.
+
+### A note on ordering
+
+Provisioning and raising or dropping the access point are **deferred to the
+main loop**, not done in the HTTP handler that asked for them. Saving
+credentials writes flash with interrupts masked, and tearing down an
+interface from inside an lwIP callback would take away the very network the
+reply still has to travel over. So the handler records the request, answers
+the browser, and the change happens a moment later.
 
 **Credentials are only accepted over that access point.** `net_provision()`
 refuses otherwise, so nobody on your LAN can repoint the device at their own

@@ -33,6 +33,7 @@
 #include "netclock.h"
 #include "dhcpserver.h"
 #include "dnsserver.h"
+#include "lwip/apps/mdns.h"
 
 #define NTP_PORT            123
 #define NTP_MSG_LEN         48
@@ -67,8 +68,18 @@ static bool         force_sync;
 
 static uint32_t     sta_fails;
 static bool         ap_up, ap_forced;
+
+/* Requests that arrive from an HTTP handler cannot be carried out there.
+   net_provision() would write flash with interrupts masked, and both it and
+   net_ap_force() would tear down the very interface the reply still has to
+   go out on.  They record what was asked for; net_poll() does it. */
+typedef enum { PEND_NONE = 0, PEND_PROVISION, PEND_AP_ON, PEND_AP_OFF } pending_op;
+static volatile pending_op pending;
+static absolute_time_t     pending_at;
 static char         ap_ssid[33];
 static ip4_addr_t   ap_ip, ap_mask;
+
+static bool         mdns_ready, mdns_on_sta, mdns_on_ap;
 
 static char         scan_ssid[NET_SCAN_MAX][33];
 static int16_t      scan_rssi[NET_SCAN_MAX];
@@ -143,6 +154,87 @@ static void ntp_send(void)
 
   waiting = true;
   wait_deadline = make_timeout_time_ms(NTP_TIMEOUT_MS);
+}
+
+/* --- mDNS / DNS-SD ------------------------------------------------------ */
+
+const char *net_hostname(void)
+{
+  return cfg.hostname[0] ? cfg.hostname : "synchronizer";
+}
+
+bool net_mdns_active(void) { return mdns_on_sta || mdns_on_ap; }
+
+static void mdns_txt(struct mdns_service *service, void *userdata)
+{
+  (void)userdata;
+  mdns_resp_add_service_txtitem(service, "path=/", 6);
+}
+
+static struct netif *itf(int which)
+{
+  return &cyw43_state.netif[which];
+}
+
+static void mdns_up(int which, bool *flag)
+{
+  struct netif *nif = itf(which);
+
+  if (*flag || !netif_is_up(nif)) return;
+
+  cyw43_arch_lwip_begin();
+  if (!mdns_ready) { mdns_resp_init(); mdns_ready = true; }
+  if (mdns_resp_add_netif(nif, net_hostname()) == ERR_OK)
+  {
+    mdns_resp_add_service(nif, net_hostname(), "_http", DNSSD_PROTO_TCP,
+                          80, mdns_txt, NULL);
+    mdns_resp_announce(nif);
+    *flag = true;
+  }
+  cyw43_arch_lwip_end();
+}
+
+static void mdns_down(int which, bool *flag)
+{
+  if (!*flag) return;
+  cyw43_arch_lwip_begin();
+  mdns_resp_remove_netif(itf(which));
+  cyw43_arch_lwip_end();
+  *flag = false;
+}
+
+/* A hostname has to survive being a DNS label: letters, digits and hyphens,
+   no leading or trailing hyphen.  Anything else is dropped rather than
+   rejected, so a name with a space in it still produces something usable. */
+bool net_set_hostname(const char *name)
+{
+  char clean[CONFIG_NAME_LEN];
+  uint32_t n = 0;
+
+  if (!name) return false;
+  while (*name && n < CONFIG_NAME_LEN - 1u)
+  {
+    char ch = *name++;
+    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+    if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+        (ch == '-' && n > 0u))
+      clean[n++] = ch;
+  }
+  while (n > 0u && clean[n - 1u] == '-') n--;
+  clean[n] = '\0';
+  if (n == 0u) return false;
+
+  strncpy(cfg.hostname, clean, CONFIG_NAME_LEN - 1);
+  cfg.hostname[CONFIG_NAME_LEN - 1] = '\0';
+
+  /* Re-announce under the new name wherever we are already answering. */
+  cyw43_arch_lwip_begin();
+  if (mdns_on_sta) { mdns_resp_rename_netif(itf(CYW43_ITF_STA), cfg.hostname);
+                     mdns_resp_announce(itf(CYW43_ITF_STA)); }
+  if (mdns_on_ap)  { mdns_resp_rename_netif(itf(CYW43_ITF_AP), cfg.hostname);
+                     mdns_resp_announce(itf(CYW43_ITF_AP)); }
+  cyw43_arch_lwip_end();
+  return true;
 }
 
 /* --- scanning ---------------------------------------------------------- */
@@ -226,12 +318,14 @@ static void ap_start(void)
 
   ap_up = true;
   state = NET_AP;
+  mdns_up(CYW43_ITF_AP, &mdns_on_ap);
   net_scan_start();          /* best effort; an empty list is fine */
 }
 
 static void ap_stop(void)
 {
   if (!ap_up) return;
+  mdns_down(CYW43_ITF_AP, &mdns_on_ap);
   dnsserver_stop();
   dhcpserver_stop();
   cyw43_arch_disable_ap_mode();
@@ -240,9 +334,8 @@ static void ap_stop(void)
 
 void net_ap_force(bool on)
 {
-  ap_forced = on;
-  if (on) { ap_start(); }
-  else    { ap_stop(); state = NET_OFF; retry_at = get_absolute_time(); sta_fails = 0; }
+  pending    = on ? PEND_AP_ON : PEND_AP_OFF;
+  pending_at = make_timeout_time_ms(400);      /* let any reply get out */
 }
 
 bool net_provision(const char *ssid, const char *pass)
@@ -252,15 +345,48 @@ bool net_provision(const char *ssid, const char *pass)
 
   strncpy(cfg.ssid, ssid, CONFIG_SSID_LEN - 1); cfg.ssid[CONFIG_SSID_LEN - 1] = '\0';
   strncpy(cfg.pass, pass ? pass : "", CONFIG_PASS_LEN - 1); cfg.pass[CONFIG_PASS_LEN - 1] = '\0';
-  config_save();
 
-  ap_forced = false;
-  sta_fails = 0;
-  ap_stop();
-  state       = NET_OFF;
-  have_server = false;
-  retry_at    = get_absolute_time();
+  /* Saving and switching networks happens in net_poll, a moment from now,
+     so the browser gets its answer before the access point disappears. */
+  pending    = PEND_PROVISION;
+  pending_at = make_timeout_time_ms(1200);
   return true;
+}
+
+static void pending_run(void)
+{
+  pending_op op = pending;
+
+  if (op == PEND_NONE) return;
+  if (absolute_time_diff_us(get_absolute_time(), pending_at) > 0) return;
+  pending = PEND_NONE;
+
+  switch (op)
+  {
+    case PEND_PROVISION:
+      config_save();
+      ap_forced   = false;
+      sta_fails   = 0;
+      ap_stop();
+      state       = NET_OFF;
+      have_server = false;
+      retry_at    = get_absolute_time();
+      break;
+    case PEND_AP_ON:
+      ap_forced = true;
+      mdns_down(CYW43_ITF_STA, &mdns_on_sta);
+      ap_start();
+      break;
+    case PEND_AP_OFF:
+      ap_forced = false;
+      ap_stop();
+      state     = NET_OFF;
+      sta_fails = 0;
+      retry_at  = get_absolute_time();
+      break;
+    default:
+      break;
+  }
 }
 
 /* --- public ---------------------------------------------------------- */
@@ -291,6 +417,7 @@ void net_init(void)
 
 void net_reconnect(void)
 {
+  mdns_down(CYW43_ITF_STA, &mdns_on_sta);
   ap_stop();
   ap_forced   = false;
   sta_fails   = 0;
@@ -304,6 +431,8 @@ void net_request_sync(void) { force_sync = true; }
 void net_poll(void)
 {
   if (state == NET_FAILED) return;
+
+  pending_run();
 
   if (ap_up)
   {
@@ -331,6 +460,7 @@ void net_poll(void)
     sta_fails = 0;
     state     = NET_ONLINE;
     next_poll = get_absolute_time();
+    mdns_up(CYW43_ITF_STA, &mdns_on_sta);
     return;
   }
 
@@ -338,10 +468,14 @@ void net_poll(void)
 
   if (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) != CYW43_LINK_UP)
   {
+    mdns_down(CYW43_ITF_STA, &mdns_on_sta);
     state    = NET_OFF;
     retry_at = make_timeout_time_ms(5000);
     return;
   }
+
+  /* DHCP may not have finished when the link first came up. */
+  if (!mdns_on_sta) mdns_up(CYW43_ITF_STA, &mdns_on_sta);
 
   if (waiting)
   {

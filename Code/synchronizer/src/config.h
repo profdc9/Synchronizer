@@ -31,11 +31,12 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  4u
+#define CONFIG_VERSION  5u
 
 #define CONFIG_SSID_LEN 33
 #define CONFIG_PASS_LEN 65
 #define CONFIG_HOST_LEN 48
+#define CONFIG_NAME_LEN 32
 
 typedef struct _synchronizer_config
 {
@@ -118,6 +119,11 @@ typedef struct _synchronizer_config
      much - it is printed in the README - but it does keep your home Wi-Fi
      password from crossing an open link in the clear while you type it in. */
   char     ap_pass[CONFIG_PASS_LEN];
+
+  /* Advertised over mDNS, so the device answers to <hostname>.local and
+     shows up in service browsers instead of only at an IP address.  Must
+     be a single DNS label: letters, digits and hyphens. */
+  char     hostname[CONFIG_NAME_LEN];
   int32_t  tz_offset_s;         /* for display only; discipline is UTC   */
 
   /* --- learned ---------------------------------------------------- */

@@ -131,7 +131,10 @@ canvas{width:100%;height:130px;display:block;margin-top:9px;border:1px solid var
 <tr><td class="k">unix time</td><td class="v"><span id="tunix">-</span></td></tr>
 <tr><td class="k">crystal</td><td class="v"><span id="tppb">-</span> ppb</td></tr>
 <tr><td class="k">last offset</td><td class="v"><span id="toff">-</span> us</td></tr>
+<tr><td class="k">name</td><td class="v"><span id="thost">-</span></td></tr>
 </table>
+<div class="row"><label>hostname</label><input id="host">
+<button onclick="cfg('host')">Apply</button></div>
 <div class="row"><button onclick="act('sync')">Sync now</button>
 <button onclick="if(confirm('Raise the setup access point? This drops the Wi-Fi connection.'))act('ap&on=1')">Setup AP</button></div>
 <div class="note">Credentials are only accepted over the device's own setup network, never from here. Use <code>WIFI ssid,pass</code> on the serial console, or raise the setup access point.</div>
@@ -225,6 +228,7 @@ function poll(){fetch('/api/status').then(function(r){return r.json()}).then(fun
 
  var T=d.time;t('tnet',T.net);t('tntp',T.ok+' ok, '+T.fail+' failed');
  t('trtt',num(T.rtt));t('tunix',T.have?num(T.unix):'not set');
+ t('thost',d.host+'.local'+(d.mdns?'':' (not advertised)'));fld('host',d.host);
  t('tppb',(T.ppb>0?'+':'')+T.ppb+' ('+T.fixes+' fixes)');t('toff',num(T.offset_us));
 
  fld('rearm',N.pct[0]);fld('minb',N.pct[1]);fld('maxb',N.pct[2]);

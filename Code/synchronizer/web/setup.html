@@ -37,10 +37,14 @@ font-weight:400;font-size:14px;margin-top:9px;padding:9px}
 </div>
 <p class="n">The device restarts its network connection when you press Connect, so
 this page will stop responding and the setup network will disappear. If the details
-were right, the clock joins your network and its own page moves there. If they were
-wrong, it raises this setup network again after a few tries.</p>
+were right, the clock joins your network and answers at
+<b>http://synchronizer.local</b> — or at whatever address your router gives it, if
+your device does not resolve <code>.local</code> names. If they were wrong, it
+raises this setup network again after a few tries.</p>
 </div>
 <script>
+var host='synchronizer';
+fetch('/api/status').then(function(r){return r.json()}).then(function(d){host=d.host}).catch(function(){});
 function $(i){return document.getElementById(i)}
 function pick(){var v=$('pick').value;if(v)$('ssid').value=v}
 function say(t,c){var m=$('msg');m.textContent=t;m.className=c||''}
@@ -61,7 +65,7 @@ function save(){
  $('go').disabled=true;say('Saving and connecting…');
  fetch('/api/wifi?ssid='+encodeURIComponent(s)+'&pass='+encodeURIComponent($('pass').value),
   {method:'POST'}).then(function(r){return r.json()}).then(function(d){
-   if(d.ok)say('Saved. Rejoin your own Wi-Fi and look for the clock there.','ok');
+   if(d.ok)say('Saved. Rejoin your own Wi-Fi, then open http://'+(host||'synchronizer')+'.local','ok');
    else{say('The device would not accept that.','bad');$('go').disabled=false}})
   .catch(function(){say('Saved — the setup network has gone, which is expected.','ok')})}
 list();

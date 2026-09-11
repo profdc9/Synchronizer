@@ -69,6 +69,20 @@ bool        net_provision(const char *ssid, const char *pass);
 
 void        net_ap_force(bool on);      /* raise or drop the AP by hand */
 
+/* --- naming ------------------------------------------------------------
+
+   An mDNS responder answers for <hostname>.local and advertises the web
+   interface as an _http._tcp service, so neither the setup page nor the
+   main one needs anybody to know an IP address.
+
+   It is a convenience, not a guarantee: .local resolves reliably on macOS,
+   iOS, Windows 10 and later, and Linux with Avahi, but typing it into a
+   browser on Android is unreliable. STATUS always prints the address. */
+
+const char *net_hostname(void);
+bool        net_set_hostname(const char *name);  /* sanitises to a DNS label */
+bool        net_mdns_active(void);
+
 /* Best-effort list of nearby networks, to save typing an SSID on a phone.
    Scanning is not always possible while the AP is up, so an empty list is
    normal and the setup page always offers a plain text field. */
