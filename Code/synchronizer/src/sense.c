@@ -1,0 +1,342 @@
+/* sense.c */
+
+/*
+   Copyright (c) 2026 Daniel Marks
+
+  This software is provided 'as-is', without any express or implied
+  warranty. In no event will the authors be held liable for any damages
+  arising from the use of this software.
+
+  Permission is granted to anyone to use this software for any purpose,
+  including commercial applications, and to alter it and redistribute it
+  freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+  2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+  3. This notice may not be removed or altered from any source distribution.
+*/
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include "pico/stdlib.h"
+#include "hardware/pwm.h"
+#include "hardware/adc.h"
+#include "hardware/dma.h"
+#include "hardware/clocks.h"
+#include "board.h"
+#include "config.h"
+#include "sense.h"
+#include "timebase.h"
+
+/* Baseline tracking.  At 1 kHz a shift of 12 is a time constant of about
+   four seconds - long compared with the 0.2 s bump, short enough to follow
+   supply and thermal drift.  It is frozen while an event is in progress so
+   the event cannot drag the baseline after itself. */
+#define BASELINE_SHIFT      12
+
+/* An event that lasts less than this is noise; one that lasts longer than
+   this is something stuck, not a pendulum. */
+#define MIN_EVENT_US        15000u
+#define MAX_EVENT_US        500000u
+
+/* Ignore anything arriving sooner than this after the previous event - one
+   swing cannot follow another that fast. */
+#define REARM_US            300000u
+
+static volatile sense_event ring[SENSE_RING];
+static volatile uint32_t    ring_head, ring_tail;
+static volatile uint32_t    ev_count, overruns;
+static volatile uint16_t    last_sample;
+static volatile int32_t     baseline_q;         /* baseline << BASELINE_SHIFT */
+static volatile bool        running;
+static volatile bool        adc_busy;           /* a capture owns the ADC */
+static volatile uint64_t    last_event_us;
+
+static repeating_timer_t    samp_timer;
+static uint32_t             tank_hz;
+static uint                 pwm_slice, pwm_chan;
+
+/* in-progress event */
+static bool     in_event;
+static uint64_t rise_us, prev_us;
+static uint16_t prev_sample;
+static uint16_t ev_peak;
+static uint16_t ev_baseline;
+
+/* interval history for sense_mean_interval_us */
+#define IVAL_RING 64
+static volatile uint32_t ivals[IVAL_RING];
+static volatile uint32_t ival_n, ival_head;
+
+static void tank_apply(uint32_t hz)
+{
+  uint32_t sysclk = clock_get_hz(clk_sys);
+  uint32_t div    = 1;
+  uint32_t wrap;
+
+  if (hz < 100u) hz = 100u;
+  while ((sysclk / (div * hz)) > 65535u) div++;
+  wrap = (sysclk / (div * hz));
+  if (wrap < 2u) wrap = 2u;
+
+  pwm_set_clkdiv_int_frac(pwm_slice, (uint8_t)(div > 255 ? 255 : div), 0);
+  pwm_set_wrap(pwm_slice, (uint16_t)(wrap - 1u));
+  pwm_set_chan_level(pwm_slice, pwm_chan, (uint16_t)(wrap / 2u));  /* 50% */
+  tank_hz = sysclk / (div * wrap);
+}
+
+static void push_event(uint64_t t_us, uint16_t peak, uint16_t base, uint32_t width)
+{
+  uint32_t head = ring_head;
+  uint32_t next = (head + 1u) % SENSE_RING;
+
+  if (next == ring_tail) { overruns++; ring_tail = (ring_tail + 1u) % SENSE_RING; }
+
+  ring[head].seq      = ++ev_count;
+  ring[head].t_us     = t_us;
+  ring[head].utc_ns   = tb_have_time() ? tb_utc_ns() - (time_us_64() - t_us) * 1000ull : 0ull;
+  ring[head].peak     = peak;
+  ring[head].baseline = base;
+  ring[head].width_us = width;
+  ring_head = next;
+
+  if (last_event_us != 0)
+  {
+    uint32_t d = (uint32_t)(t_us - last_event_us);
+    ivals[ival_head] = d;
+    ival_head = (ival_head + 1u) % IVAL_RING;
+    if (ival_n < IVAL_RING) ival_n++;
+  }
+  last_event_us = t_us;
+}
+
+/* Linear interpolation of the instant a threshold was crossed between two
+   consecutive samples.  Returns a time between prev_us and now_us. */
+static uint64_t cross_time(uint64_t t0, uint64_t t1, int32_t v0, int32_t v1, int32_t thr)
+{
+  int32_t den = v1 - v0;
+  if (den == 0) return t1;
+  int64_t num = (int64_t)(thr - v0) * (int64_t)(t1 - t0);
+  int64_t off = num / den;
+  if (off < 0) off = 0;
+  if (off > (int64_t)(t1 - t0)) off = (int64_t)(t1 - t0);
+  return t0 + (uint64_t)off;
+}
+
+static bool sample_cb(repeating_timer_t *rt)
+{
+  uint64_t now;
+  uint16_t s;
+  int32_t  base, dev, thr;
+
+  (void)rt;
+  if (!running || adc_busy)
+  {
+    prev_us = time_us_64();     /* keep the interpolation interval honest */
+    in_event = false;
+    return true;
+  }
+
+  adc_select_input(ADC_CH_AMPLITUDE);
+  s   = (uint16_t)adc_read();
+  now = time_us_64();
+  last_sample = s;
+
+  if (baseline_q == 0) baseline_q = ((int32_t)s) << BASELINE_SHIFT;
+  base = baseline_q >> BASELINE_SHIFT;
+
+  /* Signed excursion in the direction the bob is expected to push it. */
+  dev = cfg.detect_falling ? (base - (int32_t)s) : ((int32_t)s - base);
+  thr = (int32_t)cfg.detect_threshold;
+
+  if (!in_event)
+  {
+    {
+      /* Signed, or a sample below the baseline wraps and the filter blows up. */
+      int32_t e = (((int32_t)s) << BASELINE_SHIFT) - baseline_q;
+      baseline_q += e >> BASELINE_SHIFT;
+    }
+
+    if (dev >= thr && (last_event_us == 0u || (now - last_event_us) > REARM_US))
+    {
+      int32_t pdev = cfg.detect_falling ? (base - (int32_t)prev_sample)
+                                        : ((int32_t)prev_sample - base);
+      in_event    = true;
+      ev_peak     = (uint16_t)dev;
+      ev_baseline = (uint16_t)base;
+      rise_us     = cross_time(prev_us, now, pdev, dev, thr);
+    }
+  }
+  else
+  {
+    if (dev > (int32_t)ev_peak) ev_peak = (uint16_t)dev;
+
+    if (dev < thr)
+    {
+      int32_t pdev = cfg.detect_falling ? (ev_baseline - (int32_t)prev_sample)
+                                        : ((int32_t)prev_sample - ev_baseline);
+      uint64_t fall_us = cross_time(prev_us, now, pdev, dev, thr);
+      uint32_t width   = (uint32_t)(fall_us - rise_us);
+
+      in_event = false;
+      if (width >= MIN_EVENT_US && width <= MAX_EVENT_US)
+        push_event(rise_us + width / 2u, ev_peak, ev_baseline, width);
+    }
+    else if ((now - rise_us) > MAX_EVENT_US)
+    {
+      /* Stuck high - abandon the event and let the baseline re-acquire. */
+      in_event   = false;
+      baseline_q = ((int32_t)s) << BASELINE_SHIFT;
+    }
+  }
+
+  prev_sample = s;
+  prev_us     = now;
+  return true;
+}
+
+void sense_init(void)
+{
+  gpio_set_function(GPIO_OSCIL, GPIO_FUNC_PWM);
+  pwm_slice = pwm_gpio_to_slice_num(GPIO_OSCIL);
+  pwm_chan  = pwm_gpio_to_channel(GPIO_OSCIL);
+  pwm_set_phase_correct(pwm_slice, false);
+  tank_apply(cfg.tank_hz);
+  pwm_set_enabled(pwm_slice, true);
+
+  adc_init();
+  adc_gpio_init(GPIO_AMPLITUDE);
+  adc_gpio_init(GPIO_OSC_SIGNAL);
+
+  ring_head = ring_tail = ev_count = overruns = 0;
+  baseline_q = 0; in_event = false; last_event_us = 0;
+  ival_n = ival_head = 0;
+  prev_us = time_us_64(); prev_sample = 0;
+  running = cfg.sense_enabled != 0;
+
+  add_repeating_timer_us(-(int64_t)(1000000 / SENSE_SAMPLE_HZ), sample_cb, NULL, &samp_timer);
+}
+
+void sense_set_tank_hz(uint32_t hz) { tank_apply(hz); cfg.tank_hz = tank_hz; }
+uint32_t sense_tank_hz(void) { return tank_hz; }
+void sense_enable(bool on) { running = on; if (!on) in_event = false; }
+bool sense_enabled(void) { return running; }
+
+bool sense_next_event(sense_event *out)
+{
+  if (ring_tail == ring_head) return false;
+  memcpy(out, (const void *)&ring[ring_tail], sizeof(sense_event));
+  ring_tail = (ring_tail + 1u) % SENSE_RING;
+  return true;
+}
+
+uint16_t sense_baseline(void)  { return (uint16_t)(baseline_q >> BASELINE_SHIFT); }
+uint16_t sense_last_sample(void) { return last_sample; }
+uint32_t sense_event_count(void) { return ev_count; }
+uint32_t sense_overrun_count(void) { return overruns; }
+uint64_t sense_last_event_us(void) { return last_event_us; }
+
+uint64_t sense_mean_interval_us(uint32_t n)
+{
+  uint64_t sum = 0;
+  uint32_t have = ival_n, i, idx;
+
+  if (n > have) n = have;
+  if (n == 0u) return 0;
+  for (i = 0; i < n; i++)
+  {
+    idx = (ival_head + IVAL_RING - 1u - i) % IVAL_RING;
+    sum += ivals[idx];
+  }
+  return sum / n;
+}
+
+/* --- bring-up tools ---------------------------------------------------- */
+
+void sense_sweep(uint32_t from_hz, uint32_t to_hz, uint32_t step_hz, uint32_t dwell_ms)
+{
+  uint32_t saved = tank_hz;
+  bool     was   = running;
+  uint32_t f;
+  uint32_t best_f = from_hz, best_v = 0, worst_v = 0xFFFFFFFFu, worst_f = from_hz;
+
+  if (step_hz == 0u) step_hz = 100u;
+  if (dwell_ms == 0u) dwell_ms = 20u;
+
+  running = false;
+  printf("     hz    adc   mV\r\n");
+  for (f = from_hz; f <= to_hz; f += step_hz)
+  {
+    uint32_t acc = 0, i;
+    tank_apply(f);
+    sleep_ms(dwell_ms);
+    adc_select_input(ADC_CH_AMPLITUDE);
+    for (i = 0; i < 64u; i++) { acc += adc_read(); sleep_us(50); }
+    acc /= 64u;
+    printf("%7lu %6lu %5lu\r\n", (unsigned long)tank_hz, (unsigned long)acc,
+           (unsigned long)((acc * 3300u) / 4095u));
+    if (acc > best_v)  { best_v = acc;  best_f = tank_hz; }
+    if (acc < worst_v) { worst_v = acc; worst_f = tank_hz; }
+  }
+  printf("peak %lu at %lu hz, trough %lu at %lu hz\r\n",
+         (unsigned long)best_v, (unsigned long)best_f,
+         (unsigned long)worst_v, (unsigned long)worst_f);
+
+  tank_apply(saved);
+  baseline_q = 0;
+  running = was;
+}
+
+void sense_capture(uint32_t rate_hz, uint32_t count)
+{
+  static uint16_t buf[2048];
+  int chan;
+  dma_channel_config c;
+  float div;
+  uint32_t i;
+
+  if (count > 2048u) count = 2048u;
+  if (count == 0u)   count = 512u;
+  if (rate_hz == 0u) rate_hz = 200000u;
+
+  adc_busy = true;
+  adc_run(false);
+  adc_fifo_drain();
+  adc_select_input(ADC_CH_OSC_SIGNAL);
+  adc_fifo_setup(true, true, 1, false, false);
+
+  /* The ADC clock is 48 MHz and one conversion takes 96 cycles, so the
+     fastest it will go is 500 ksps. */
+  div = 48000000.0f / (float)rate_hz;
+  if (div < 96.0f) div = 96.0f;
+  adc_set_clkdiv(div - 1.0f);
+
+  chan = dma_claim_unused_channel(true);
+  c = dma_channel_get_default_config(chan);
+  channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
+  channel_config_set_read_increment(&c, false);
+  channel_config_set_write_increment(&c, true);
+  channel_config_set_dreq(&c, DREQ_ADC);
+  dma_channel_configure(chan, &c, buf, &adc_hw->fifo, count, true);
+
+  adc_run(true);
+  dma_channel_wait_for_finish_blocking(chan);
+  adc_run(false);
+  adc_fifo_drain();
+  dma_channel_unclaim(chan);
+
+  adc_set_clkdiv(0);
+  adc_busy = false;
+  baseline_q = 0;
+
+  printf("captured %lu samples at %lu hz\r\n",
+         (unsigned long)count, (unsigned long)(48000000.0f / div));
+  for (i = 0; i < count; i++)
+    printf("%lu%s", (unsigned long)(buf[i] & 0x0FFFu), ((i % 16u) == 15u) ? "\r\n" : " ");
+  if ((count % 16u) != 0u) printf("\r\n");
+}
