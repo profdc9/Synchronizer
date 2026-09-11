@@ -1,5 +1,6 @@
-/* webpage.c - the web interface page, generated from page.html.
-   Edit the HTML and regenerate; do not hand-edit the escaping. */
+/* webpage.c - the web interface page.
+   GENERATED from web/page.html by web/genpage.py - do not edit by hand.
+   Edit the HTML and regenerate. */
 
 /*
    Copyright (c) 2026 Daniel Marks

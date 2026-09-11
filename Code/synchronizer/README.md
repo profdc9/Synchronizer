@@ -185,6 +185,18 @@ Two things shape the design:
   allocates, never touches the ADC or flash, and never blocks. Each of the
   three connection slots owns its own request and response buffers.
 
+The page lives in flash as a C string. **Edit `web/page.html`, not
+`src/webpage.c`**, and regenerate:
+
+```sh
+python3 web/genpage.py          # rewrite src/webpage.c
+python3 web/genpage.py --check  # fail if it is stale
+```
+
+The generator refuses to write unless it can parse its own output back into
+the exact bytes of the source, so a mistake in the escaping cannot reach the
+firmware silently.
+
 **There is no authentication.** Anyone who can reach the device on your
 network can energise the drive coil. The pulse ceiling, the watchdog and the
 duty bucket in `drive.c` bound what that can do to the hardware, but they

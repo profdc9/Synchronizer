@@ -1,0 +1,235 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Synchronizer</title><style>
+:root{--bg:#f5f6f7;--fg:#14161a;--dim:#5b636b;--line:#dde1e5;--card:#fff;--acc:#2a78d6;--warn:#c8521f;--ok:#1b7f4b}
+@media(prefers-color-scheme:dark){:root{--bg:#15171a;--fg:#eef1f4;--dim:#98a0a8;--line:#2a2f35;--card:#1c1f23;--acc:#5c9ded;--warn:#e07a45;--ok:#4bbd82}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
+font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:940px;margin:0 auto;padding:18px 14px 48px}
+h1{font-size:19px;margin:0;letter-spacing:-.01em}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;justify-content:space-between;
+border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:16px}
+.sub{color:var(--dim);font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:14px}
+section{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:13px 14px 15px}
+h2{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);margin:0 0 10px;font-weight:600}
+table{width:100%;border-collapse:collapse}
+td{padding:2px 0;vertical-align:baseline}
+td.k{color:var(--dim);white-space:nowrap;padding-right:10px}
+td.v{text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+.row{display:flex;gap:6px;align-items:center;margin-top:7px;flex-wrap:wrap}
+label{color:var(--dim);font-size:12px;min-width:62px}
+input{width:84px;padding:4px 6px;border:1px solid var(--line);border-radius:3px;background:var(--bg);
+color:var(--fg);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+select{padding:4px;border:1px solid var(--line);border-radius:3px;background:var(--bg);color:var(--fg);font-size:13px}
+button{padding:5px 11px;border:1px solid var(--line);border-radius:3px;background:var(--bg);color:var(--fg);
+font-size:13px;cursor:pointer}
+button:hover{border-color:var(--acc);color:var(--acc)}
+button.p{background:var(--acc);border-color:var(--acc);color:#fff}
+button.p:hover{opacity:.88;color:#fff}
+button:disabled{opacity:.45;cursor:default}
+canvas{width:100%;height:130px;display:block;margin-top:9px;border:1px solid var(--line);border-radius:3px}
+.pill{font-size:11px;padding:2px 7px;border-radius:9px;border:1px solid var(--line);font-family:ui-monospace,monospace}
+.on{color:var(--ok);border-color:var(--ok)}.off{color:var(--dim)}
+.bad{color:var(--warn);border-color:var(--warn)}
+.note{color:var(--dim);font-size:11.5px;margin-top:8px}
+.wide{grid-column:1/-1}
+</style></head><body><div class="wrap">
+<header><h1>Synchronizer</h1>
+<div class="sub"><span id="net">-</span> &middot; <span id="job">idle</span></div></header>
+
+<div class="grid">
+
+<section><h2>Loop</h2>
+<table>
+<tr><td class="k">state</td><td class="v"><span id="lstate" class="pill">-</span></td></tr>
+<tr><td class="k">phase error</td><td class="v"><span id="lerr">-</span> us</td></tr>
+<tr><td class="k">smoothed</td><td class="v"><span id="lfilt">-</span> us</td></tr>
+<tr><td class="k">events</td><td class="v"><span id="lev">-</span></td></tr>
+<tr><td class="k">pendulum drift</td><td class="v"><span id="ldrift">-</span> ppb</td></tr>
+<tr><td class="k">credit</td><td class="v"><span id="lcred">-</span> ns</td></tr>
+<tr><td class="k">hand offset</td><td class="v"><span id="loff">-</span> ms</td></tr>
+</table>
+<div class="row"><button id="ctlbtn" class="p">-</button>
+<button onclick="act('resetloop')">Re-acquire</button></div>
+<div class="row"><label>kp/ki</label><input id="kp"><input id="ki">
+<label style="min-width:34px">slew</label><input id="slew" style="width:62px">
+<button onclick="cfg('kp,ki,slew')">Apply</button></div>
+<div class="row"><label>offset ms</label><input id="offms" value="0">
+<button onclick="act('offset&ms='+v('offms'))">Walk hands</button></div>
+<div class="note">Positive offset makes the hands read later. The loop slews there at the rate limit; it never jumps.</div>
+</section>
+
+<section><h2>Clock</h2>
+<table>
+<tr><td class="k">swing period</td><td class="v"><span id="cper">-</span></td></tr>
+<tr><td class="k">sense interval</td><td class="v"><span id="civ">-</span></td></tr>
+<tr><td class="k">measured</td><td class="v"><span id="cmeas">-</span></td></tr>
+<tr><td class="k">error</td><td class="v"><span id="cerr">-</span></td></tr>
+</table>
+<div class="row"><label>bph</label><input id="bph">
+<label style="min-width:78px">beats/swing</label><input id="bps" style="width:48px">
+<button onclick="cfg('bph,bps')">Apply</button></div>
+<div class="row"><label>coils</label>
+<select id="geo" onchange="setgeo()">
+<option value="1,500">extremes, opposite</option>
+<option value="1,0">extremes, same end</option>
+<option value="2,250">sense centre, drive at extreme</option>
+<option value="">custom</option></select></div>
+<div class="row"><label>events/sw</label><input id="epp" style="width:48px">
+<label style="min-width:40px">offset</label><input id="ppt" style="width:62px">
+<button onclick="cfg('epp,ppt')">Apply</button></div>
+<div class="note">Offset is parts per thousand of a full period from a sense event to the bob reaching the drive coil.</div>
+</section>
+
+<section><h2>Sense</h2>
+<table>
+<tr><td class="k">detector</td><td class="v"><span id="son" class="pill">-</span></td></tr>
+<tr><td class="k">tank drive</td><td class="v"><span id="stank">-</span> Hz</td></tr>
+<tr><td class="k">resonance</td><td class="v"><span id="sf0">-</span></td></tr>
+<tr><td class="k">baseline / last</td><td class="v"><span id="sbase">-</span></td></tr>
+<tr><td class="k">events</td><td class="v"><span id="sev">-</span></td></tr>
+<tr><td class="k">windows</td><td class="v"><span id="swin">-</span></td></tr>
+</table>
+<div class="row"><label>scan Hz</label><input id="rlo" value="2000"><input id="rhi" value="80000">
+<button id="scanbtn" class="p" onclick="scan()">Find resonance</button></div>
+<canvas id="cv" width="600" height="130"></canvas>
+<div class="row"><label>tank</label><input id="tank">
+<label style="min-width:56px">threshold</label><input id="thresh" style="width:56px">
+<button onclick="cfg('tank,thresh')">Apply</button></div>
+<div class="row"><label>bob makes</label>
+<select id="falling"><option value="1">amplitude fall</option><option value="0">amplitude rise</option></select>
+<button onclick="cfg('falling')">Apply</button>
+<button id="sensebtn" onclick="S&&act('sense&on='+(S.sense.on?0:1))">-</button></div>
+<div class="note">Run the scan with nothing metallic near the coil.</div>
+</section>
+
+<section><h2>Drive</h2>
+<table>
+<tr><td class="k">coil</td><td class="v"><span id="don" class="pill">-</span></td></tr>
+<tr><td class="k">authority</td><td class="v"><span id="dauth">-</span></td></tr>
+<tr><td class="k">pulses</td><td class="v"><span id="dp">-</span></td></tr>
+<tr><td class="k">duty budget</td><td class="v"><span id="dbud">-</span> us</td></tr>
+</table>
+<div class="row"><label>width us</label><input id="pw">
+<label style="min-width:34px">adv</label><input id="adv" style="width:62px">
+<label style="min-width:34px">ret</label><input id="ret" style="width:62px">
+<button onclick="cfg('pw,adv,ret')">Apply</button></div>
+<div class="row"><button onclick="act('pulse&us='+v('pw'))">Test pulse</button>
+<button onclick="act('coiloff')">Coil off</button></div>
+<div class="row"><label>authority</label><input id="auth" style="width:96px">
+<button onclick="cfg('auth')">Set ns</button>
+<button onclick="act('measure&n=20&retard=1')">Measure 20</button></div>
+<div class="note">Measure needs the loop tracking. Start with a narrow pulse and work up.</div>
+</section>
+
+<section><h2>Time</h2>
+<table>
+<tr><td class="k">network</td><td class="v"><span id="tnet">-</span></td></tr>
+<tr><td class="k">NTP</td><td class="v"><span id="tntp">-</span></td></tr>
+<tr><td class="k">round trip</td><td class="v"><span id="trtt">-</span> us</td></tr>
+<tr><td class="k">unix time</td><td class="v"><span id="tunix">-</span></td></tr>
+<tr><td class="k">crystal</td><td class="v"><span id="tppb">-</span> ppb</td></tr>
+<tr><td class="k">last offset</td><td class="v"><span id="toff">-</span> us</td></tr>
+</table>
+<div class="row"><button onclick="act('sync')">Sync now</button></div>
+<div class="note">Wi-Fi credentials are set over the serial console with <code>WIFI ssid,pass</code>; they are never served over the network.</div>
+</section>
+
+<section><h2>Configuration</h2>
+<div class="row"><label>windows %</label><input id="rearm" style="width:48px"><input id="minb" style="width:48px"><input id="maxb" style="width:48px">
+<button onclick="cfg('rearm,minb,maxb')">Apply</button></div>
+<div class="note">Rearm, minimum and maximum bump width, as percentages of the sense interval.</div>
+<div class="row"><label>lock</label><input id="acqn" style="width:48px"><input id="acqtol" style="width:48px">
+<button onclick="cfg('acqn,acqtol')">Apply</button></div>
+<div class="note">Events needed to lock, and the gap tolerance in percent.</div>
+<div class="row" style="margin-top:12px"><button id="savebtn" class="p" onclick="act('save')">Save to flash</button></div>
+<div class="note">Applied changes take effect at once but are lost on reset until they are saved.</div>
+</section>
+
+</div></div>
+<script>
+var S=null,scanning=false;
+function $(i){return document.getElementById(i)}
+function v(i){return $(i).value}
+function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}
+function num(x){return (x===null||x===undefined)?'-':(''+x).replace(/\B(?=(\d{3})+(?!\d))/g,' ')}
+function post(u){return fetch(u,{method:'POST'}).then(function(r){return r.json().catch(function(){return{}})})}
+function act(a){post('/api/action?do='+a).then(poll)}
+function cfg(keys){var q=keys.split(',').map(function(k){return k+'='+encodeURIComponent(v(k))}).join('&');
+ post('/api/config?'+q).then(poll)}
+function setgeo(){var g=v('geo');if(!g)return;var p=g.split(',');$('epp').value=p[0];$('ppt').value=p[1];cfg('epp,ppt')}
+function fld(i,x){var e=$(i);if(document.activeElement!==e)e.value=x}
+
+function scan(){if(scanning)return;scanning=true;$('scanbtn').disabled=true;
+ post('/api/action?do=resonance&lo='+v('rlo')+'&hi='+v('rhi'))}
+
+function draw(d){var c=$('cv'),g=c.getContext('2d'),W=c.width,H=c.height;
+ var cs=getComputedStyle(document.documentElement);
+ g.clearRect(0,0,W,H);
+ if(!d||!d.n){g.fillStyle=cs.getPropertyValue('--dim');g.font='12px sans-serif';
+  g.fillText('no scan yet',10,H/2);return}
+ var lo=d.hz[0],hi=d.hz[d.n-1],mn=Math.min.apply(null,d.adc),mx=Math.max.apply(null,d.adc);
+ if(mx<=mn)mx=mn+1;
+ g.strokeStyle=cs.getPropertyValue('--acc');g.lineWidth=2;g.beginPath();
+ for(var i=0;i<d.n;i++){var x=(d.hz[i]-lo)/(hi-lo)*(W-8)+4,y=H-6-(d.adc[i]-mn)/(mx-mn)*(H-20);
+  i?g.lineTo(x,y):g.moveTo(x,y)}
+ g.stroke();
+ g.fillStyle=cs.getPropertyValue('--dim');g.font='10px ui-monospace,monospace';
+ g.fillText(lo+' Hz',4,11);var s=hi+' Hz';g.fillText(s,W-g.measureText(s).width-4,11);
+ if(S&&S.res&&S.res.f0>=lo&&S.res.f0<=hi){var fx=(S.res.f0-lo)/(hi-lo)*(W-8)+4;
+  g.strokeStyle=cs.getPropertyValue('--warn');g.lineWidth=1;g.beginPath();
+  g.moveTo(fx,4);g.lineTo(fx,H-4);g.stroke()}}
+
+function poll(){fetch('/api/status').then(function(r){return r.json()}).then(function(d){
+ S=d;
+ t('net',d.time.net+(d.time.ip!='-'?' '+d.time.ip:''));
+ t('job',d.job=='idle'?d.jobmsg:d.job+': '+d.jobmsg);
+ if(scanning&&d.job=='idle'){scanning=false;$('scanbtn').disabled=false;
+  fetch('/api/scan').then(function(r){return r.json()}).then(draw)}
+
+ var L=d.loop,e=$('lstate');e.textContent=L.state;
+ e.className='pill '+(L.state=='track'?'on':L.state=='hold'?'bad':'off');
+ t('lerr',num(L.err_us));t('lfilt',num(L.filt_us));t('lev',num(L.events)+' ('+L.missed+' missed)');
+ t('ldrift',num(L.drift_ppb));t('lcred',num(L.credit_ns));t('loff',num(L.offset_ms));
+ var b=$('ctlbtn');b.textContent=L.on?'Stop loop':'Start loop';
+ b.onclick=function(){act('control&on='+(L.on?0:1))};
+ fld('kp',L.kp);fld('ki',L.ki);fld('slew',L.slew);
+
+ var C=d.clock;
+ t('cper',(C.period_ns/1e6).toFixed(3)+' ms');
+ t('civ',(C.interval_ns/1e6).toFixed(3)+' ms');
+ t('cmeas',C.mean_us?(C.mean_us/1000).toFixed(3)+' ms':'-');
+ t('cerr',C.mean_us?(C.ppb>0?'+':'')+num(C.ppb)+' ppb, '+(C.sday>0?'+':'')+C.sday+' s/day':'-');
+ fld('bph',C.bph);fld('bps',C.bps);fld('epp',C.epp);fld('ppt',C.ppt);
+ var gs=C.epp+','+C.ppt;if($('geo').value!=gs)$('geo').value=
+  [...$('geo').options].some(function(o){return o.value==gs})?gs:'';
+
+ var N=d.sense,se=$('son');se.textContent=N.on?'running':'stopped';
+ se.className='pill '+(N.on?'on':'off');
+ $('sensebtn').textContent=N.on?'Stop detector':'Start detector';
+ t('stank',num(N.tank));
+ t('sf0',N.f0?num(N.f0)+' Hz, Q '+(N.q10/10).toFixed(1):'not calibrated');
+ t('sbase',N.base+' / '+N.last);
+ t('sev',num(N.events)+(N.dropped?' ('+N.dropped+' dropped)':''));
+ t('swin',(N.rearm/1000).toFixed(0)+' / '+(N.minb/1000).toFixed(0)+'-'+(N.maxb/1000).toFixed(0)+' ms');
+ fld('tank',N.tank);fld('thresh',N.thresh);fld('falling',N.falling);
+
+ var D=d.drive,de=$('don');de.textContent=D.on?'ENERGISED':'off';
+ de.className='pill '+(D.on?'bad':'off');
+ t('dauth',D.auth?num(D.auth)+' ns/pulse':'not measured');
+ t('dp',num(D.pulses)+(D.refused?' ('+D.refused+' refused)':''));
+ t('dbud',num(D.budget));
+ fld('pw',D.pw);fld('adv',D.adv);fld('ret',D.ret);fld('auth',D.auth);
+
+ var T=d.time;t('tnet',T.net);t('tntp',T.ok+' ok, '+T.fail+' failed');
+ t('trtt',num(T.rtt));t('tunix',T.have?num(T.unix):'not set');
+ t('tppb',(T.ppb>0?'+':'')+T.ppb+' ('+T.fixes+' fixes)');t('toff',num(T.offset_us));
+
+ fld('rearm',N.pct[0]);fld('minb',N.pct[1]);fld('maxb',N.pct[2]);
+ fld('acqn',N.acq[0]);fld('acqtol',N.acq[1]);
+ }).catch(function(){t('job','disconnected')})}
+
+fetch('/api/scan').then(function(r){return r.json()}).then(draw).catch(function(){});
+poll();setInterval(poll,1000);
+</script></body></html>
