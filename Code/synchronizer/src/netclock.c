@@ -212,6 +212,20 @@ static void mdns_up(int which, bool *flag)
   cyw43_arch_lwip_end();
 }
 
+/* cyw43_tcpip_init makes whichever interface came up last the default, and
+   disabling AP mode leaves that netif registered and still default even
+   though its link is down.  lwIP sends anything off-subnet - a DNS lookup,
+   an NTP exchange - by the default route, so after provisioning the traffic
+   left by a dead interface and nothing ever resolved.  Point the default at
+   whichever interface is actually carrying traffic. */
+static void set_default_route(int which)
+{
+  struct netif *nif = itf(which);
+  cyw43_arch_lwip_begin();
+  if (netif_is_up(nif)) netif_set_default(nif);
+  cyw43_arch_lwip_end();
+}
+
 static void mdns_down(int which, bool *flag)
 {
   if (!*flag) return;
@@ -363,6 +377,7 @@ static void ap_start(void)
   dnsserver_start(&cyw43_state.netif[CYW43_ITF_AP], &ap_ip);
 
   power_save_off();
+  set_default_route(CYW43_ITF_AP);
   ap_up = true;
   state = NET_AP;
   mdns_up(CYW43_ITF_AP, &mdns_on_ap);
@@ -376,6 +391,7 @@ static void ap_stop(void)
   dhcpserver_stop();
   cyw43_arch_disable_ap_mode();
   ap_up = false;
+  set_default_route(CYW43_ITF_STA);   /* or nothing can reach the internet */
 }
 
 void net_ap_force(bool on)
@@ -518,6 +534,7 @@ void net_poll(void)
       state     = NET_ONLINE;
       next_poll = get_absolute_time();
       power_save_off();
+      set_default_route(CYW43_ITF_STA);
       mdns_up(CYW43_ITF_STA, &mdns_on_sta);
       return;
     }
@@ -598,10 +615,11 @@ const char *net_status_name(void)
 
 const char *net_ip(void)
 {
+  /* netif_list is whichever interface was registered last, not the one in
+     use - ask for the station explicitly. */
   if (ap_up) return "192.168.4.1";
   if (state != NET_ONLINE) return "-";
-  snprintf(ipbuf, sizeof(ipbuf), "%s",
-           ip4addr_ntoa(netif_ip4_addr(netif_list)));
+  ip4addr_ntoa_r(netif_ip4_addr(itf(CYW43_ITF_STA)), ipbuf, sizeof(ipbuf));
   return ipbuf;
 }
 
