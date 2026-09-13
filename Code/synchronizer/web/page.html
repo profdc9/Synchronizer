@@ -194,9 +194,11 @@ from here is visible to anyone watching it.</p>
 <div class="cli">
 <input id="cmd" list="cmds" placeholder="STATUS" autocapitalize="none" autocorrect="off"
  spellcheck="false" onkeydown="if(event.key=='Enter')run()">
-<button class="p" id="runbtn" onclick="run()">Run</button></div>
+<button class="p" id="runbtn" onclick="run()">Run</button>
+<button id="clrbtn" onclick="cliClear()">Clear</button></div>
 <datalist id="cmds">
-<option value="HELP"><option value="STATUS"><option value="TIME">
+<option value="HELP"><option value="STATUS"><option value="NET">
+<option value="SYNC">
 <option value="RESONANCE 2000 80000 Y"><option value="SWEEP 5000 60000 250">
 <option value="CAPTURE 200000 256"><option value="WATCH Y"><option value="WATCH N">
 <option value="MEASURE 20 Y"><option value="CONTROL Y"><option value="CONTROL N">
@@ -207,7 +209,7 @@ from here is visible to anyone watching it.</p>
 
 </div></div>
 <script>
-var S=null,scanning=false,cliseq=-1,cliwait=false;
+var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;
 function $(i){return document.getElementById(i)}
 function v(i){return $(i).value}
 function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}
@@ -219,20 +221,27 @@ function cfg(keys){var q=keys.split(',').map(function(k){return k+'='+encodeURIC
 function setgeo(){var g=v('geo');if(!g)return;var p=g.split(',');$('epp').value=p[0];$('ppt').value=p[1];cfg('epp,ppt')}
 function fld(i,x){var e=$(i);if(document.activeElement!==e)e.value=x}
 
+function cliAdd(s){var o=$('out');
+ if(cliempty){o.textContent='';cliempty=false}
+ if(s&&s.slice(-1)!='\n')s+='\n';
+ o.textContent+=s;o.scrollTop=o.scrollHeight}
+function cliClear(){$('out').textContent='Nothing run yet.';cliempty=true}
+
 function run(){
  var cmd=$('cmd').value.trim();
  if(!cmd||cliwait)return;
- cliwait=true;$('runbtn').disabled=true;$('out').textContent='running '+cmd+' ...';
+ cliwait=true;$('runbtn').disabled=true;
+ cliAdd('> '+cmd);
  fetch('/api/cli?cmd='+encodeURIComponent(cmd),{method:'POST'}).then(function(r){
   if(r.status===202)return;
   return r.text().then(function(t){throw new Error(t.trim()||('HTTP '+r.status))})
  }).catch(function(e){cliwait=false;$('runbtn').disabled=false;
-  $('out').textContent=e.message})}
+  cliAdd(e.message)})}
 
 function cliDone(){
  fetch('/api/cli').then(function(r){return r.text()}).then(function(t){
-  $('out').textContent=t.replace(/\r/g,'')||'(no output)';
-  $('out').scrollTop=0;cliwait=false;$('runbtn').disabled=false})}
+  cliAdd(t.replace(/\r/g,'')||'(no output)');
+  cliwait=false;$('runbtn').disabled=false})}
 
 function hhmm(s){if(s===null||s===undefined)return '-';
  var h=Math.floor(s/3600),m=Math.floor(s/60)%60,x=s%60;

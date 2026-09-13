@@ -191,7 +191,9 @@ int tinycl_get_command(void)
 
 void tinycl_error_message(const char *c)
 {
-  if (!tinycl_do_echo) return;
+  /* Not gated on tinycl_do_echo: echo is the typed line coming back, an
+     error is the command's only reply.  Suppressing it left the web
+     console silent on every unknown command and bad parameter. */
   tinycl_put_string(">>> ");
   tinycl_put_string(c);
   tinycl_put_stringcrlf(" <<<");
