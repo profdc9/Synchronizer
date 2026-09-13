@@ -71,11 +71,16 @@ const char web_page[] =
   ".bad{color:var(--warn);border-color:var(--warn)}\n"
   ".note{color:var(--dim);font-size:11.5px;margin-top:8px}\n"
   ".wide{grid-column:1/-1}\n"
+  "#stale{display:none;grid-column:1/-1;background:var(--card);padding:11px 13px;\n"
+  "border:1px solid var(--warn);border-left-width:3px;border-radius:4px;color:var(--warn)}\n"
   "</style></head><body><div class=\"wrap\">\n"
   "<header><h1>Synchronizer</h1>\n"
   "<div class=\"sub\"><span id=\"net\">-</span> &middot; <span id=\"job\">idle</span></div></header>\n"
   "\n"
   "<div class=\"grid\">\n"
+  "<div id=\"stale\">This page is older than the firmware serving it &mdash; it was loaded\n"
+  "before the device was reflashed, and keeps itself current by polling rather than\n"
+  "reloading. <button onclick=\"location.reload(true)\">Reload</button></div>\n"
   "\n"
   "<section><h2>Loop</h2>\n"
   "<table>\n"
@@ -240,6 +245,7 @@ const char web_page[] =
   "<script>\n"
   "var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;\n"
   "var hist=[],hpos=0,hdraft='';\n"
+  "var WEBVER='6b8571ae';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -332,6 +338,7 @@ const char web_page[] =
   "  fetch('/api/scan').then(function(r){return r.json()}).then(draw)}\n"
   " if(cliseq<0)cliseq=d.cliseq;\n"
   " else if(d.cliseq!=cliseq){cliseq=d.cliseq;cliDone()}\n"
+  " if(d.web&&d.web!=WEBVER)$('stale').style.display='block';\n"
   "\n"
   " var L=d.loop,e=$('lstate');e.textContent=L.state;\n"
   " e.className='pill '+(L.state=='track'\?'on':L.state=='hold'\?'bad':'off');\n"
@@ -474,3 +481,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
+const char web_version[] = "6b8571ae";

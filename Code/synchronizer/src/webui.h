@@ -46,6 +46,9 @@ extern const char web_page[];
 extern const uint32_t web_page_len;
 extern const char web_setup[];
 extern const uint32_t web_setup_len;
+/* Hash of the page source, so a browser tab left open across a reflash
+   can notice that its JavaScript is older than the firmware. */
+extern const char web_version[];
 
 #ifdef __cplusplus
 }

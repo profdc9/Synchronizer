@@ -10,6 +10,7 @@ Verify a round trip at any time with:
 
     python3 web/genpage.py --check
 """
+import hashlib
 import os
 import re
 import sys
@@ -96,6 +97,19 @@ def one(html, symbol):
             % (symbol, symbol))
 
 
+def stamp(html):
+    """Substitute __WEBVER__ with a hash of the page's own source.
+
+    The open browser tab keeps itself current by polling, never by
+    reloading, so after a reflash it can go on running the JavaScript it
+    loaded hours ago.  The page carries the version it was generated from
+    and compares it against the one the firmware reports, so a stale tab
+    can say so instead of quietly misbehaving.
+    """
+    ver = hashlib.sha256(html.encode("utf-8")).hexdigest()[:8]
+    return html.replace("__WEBVER__", ver), ver
+
+
 def build(sources):
     out = (
         "/* webpage.c - the pages the web interface serves.\n"
@@ -110,9 +124,15 @@ def build(sources):
 
 
 def main():
-    sources = [(open(os.path.join(HERE, f), encoding="utf-8").read(), sym)
-               for f, sym in PAGES]
-    out = build(sources)
+    raw = [(open(os.path.join(HERE, f), encoding="utf-8").read(), sym)
+           for f, sym in PAGES]
+    sources, ver = [], ""
+    for html, sym in raw:
+        html, v = stamp(html)
+        if sym == "web_page":
+            ver = v
+        sources.append((html, sym))
+    out = build(sources) + 'const char web_version[] = "%s";\n' % ver
 
     for html, sym in sources:
         if unescape(out, sym) != html:
@@ -123,12 +143,14 @@ def main():
         if cur != out:
             sys.exit("%s is stale - run: python3 web/genpage.py" % DST)
         print("webpage.c matches " + ", ".join(f for f, _ in PAGES)
-              + " (%d bytes)" % sum(len(h) for h, _ in sources))
+              + " (%d bytes, version %s)"
+              % (sum(len(h) for h, _ in sources), ver))
         return
 
     open(DST, "w", encoding="utf-8").write(out)
-    print("wrote %s from %s (%d bytes)"
-          % (DST, ", ".join(f for f, _ in PAGES), sum(len(h) for h, _ in sources)))
+    print("wrote %s from %s (%d bytes, version %s)"
+          % (DST, ", ".join(f for f, _ in PAGES),
+             sum(len(h) for h, _ in sources), ver))
 
 
 main()

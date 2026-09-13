@@ -220,12 +220,12 @@ static uint32_t json_status(char *b, uint32_t n)
     "\"res\":{\"valid\":%d,\"sat\":%d,\"f0\":%lu,\"lo\":%lu,\"hi\":%lu,"
       "\"q10\":%lu,\"peak\":%u,\"floor\":%u},"
     "\"ssid\":\"%s\",\"ntp\":\"%s\",\"ap\":%d,\"apssid\":\"%s\","
-    "\"host\":\"%s\",\"mdns\":%d,\"cliseq\":%lu}",
+    "\"host\":\"%s\",\"mdns\":%d,\"cliseq\":%lu,\"web\":\"%s\"}",
     r->valid ? 1 : 0, r->saturated ? 1 : 0, (unsigned long)r->f0_hz,
     (unsigned long)r->f_lo_hz, (unsigned long)r->f_hi_hz,
     (unsigned long)r->q_x10, r->peak_adc, r->floor_adc,
     e_ssid, e_ntp, net_in_ap() ? 1 : 0, e_ap,
-    e_host, net_mdns_active() ? 1 : 0, (unsigned long)cli_serial);
+    e_host, net_mdns_active() ? 1 : 0, (unsigned long)cli_serial, web_version);
 
   return (u < n) ? u : (n - 1u);
 }

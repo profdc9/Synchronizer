@@ -43,11 +43,16 @@ white-space:pre;overflow:auto;max-height:340px;min-height:44px}
 .bad{color:var(--warn);border-color:var(--warn)}
 .note{color:var(--dim);font-size:11.5px;margin-top:8px}
 .wide{grid-column:1/-1}
+#stale{display:none;grid-column:1/-1;background:var(--card);padding:11px 13px;
+border:1px solid var(--warn);border-left-width:3px;border-radius:4px;color:var(--warn)}
 </style></head><body><div class="wrap">
 <header><h1>Synchronizer</h1>
 <div class="sub"><span id="net">-</span> &middot; <span id="job">idle</span></div></header>
 
 <div class="grid">
+<div id="stale">This page is older than the firmware serving it &mdash; it was loaded
+before the device was reflashed, and keeps itself current by polling rather than
+reloading. <button onclick="location.reload(true)">Reload</button></div>
 
 <section><h2>Loop</h2>
 <table>
@@ -212,6 +217,7 @@ from here is visible to anyone watching it.</p>
 <script>
 var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;
 var hist=[],hpos=0,hdraft='';
+var WEBVER='__WEBVER__';
 function $(i){return document.getElementById(i)}
 function v(i){return $(i).value}
 function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}
@@ -304,6 +310,7 @@ function poll(){fetch('/api/status').then(function(r){return r.json()}).then(fun
   fetch('/api/scan').then(function(r){return r.json()}).then(draw)}
  if(cliseq<0)cliseq=d.cliseq;
  else if(d.cliseq!=cliseq){cliseq=d.cliseq;cliDone()}
+ if(d.web&&d.web!=WEBVER)$('stale').style.display='block';
 
  var L=d.loop,e=$('lstate');e.textContent=L.state;
  e.className='pill '+(L.state=='track'?'on':L.state=='hold'?'bad':'off');
