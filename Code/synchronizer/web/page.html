@@ -189,11 +189,12 @@ leave it at 0 unless you want to correct for your own reaction.</div>
 
 <section class="wide"><h2>Console</h2>
 <p class="note" style="margin:0 0 9px">The same command line as the serial console — same parser,
-same commands. <code>HELP</code> lists them. Arguments are separated by spaces; quote any containing one. Output also goes to the serial port, so a command run
+same commands. <code>HELP</code> lists them. Arguments are separated by spaces; quote any containing one.
+↑ and ↓ walk back through what you have run. Output also goes to the serial port, so a command run
 from here is visible to anyone watching it.</p>
 <div class="cli">
 <input id="cmd" list="cmds" placeholder="STATUS" autocapitalize="none" autocorrect="off"
- spellcheck="false" onkeydown="if(event.key=='Enter')run()">
+ spellcheck="false" onkeydown="cliKey(event)">
 <button class="p" id="runbtn" onclick="run()">Run</button>
 <button id="clrbtn" onclick="cliClear()">Clear</button></div>
 <datalist id="cmds">
@@ -210,6 +211,7 @@ from here is visible to anyone watching it.</p>
 </div></div>
 <script>
 var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;
+var hist=[],hpos=0,hdraft='';
 function $(i){return document.getElementById(i)}
 function v(i){return $(i).value}
 function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}
@@ -227,9 +229,28 @@ function cliAdd(s){var o=$('out');
  o.textContent+=s;o.scrollTop=o.scrollHeight}
 function cliClear(){$('out').textContent='Nothing run yet.';cliempty=true}
 
+function cliKey(e){
+ if(e.key=='Enter'){run();return}
+ if(e.key!='ArrowUp'&&e.key!='ArrowDown'||!hist.length)return;
+ if(e.key=='ArrowUp'){
+  if(hpos<=0){e.preventDefault();return}
+  if(hpos==hist.length)hdraft=$('cmd').value;
+  hpos--
+ }else{
+  if(hpos>=hist.length)return;
+  hpos++
+ }
+ e.preventDefault();
+ var i=$('cmd');
+ i.value=(hpos==hist.length)?hdraft:hist[hpos];
+ i.setSelectionRange(i.value.length,i.value.length)}
+
 function run(){
  var cmd=$('cmd').value.trim();
  if(!cmd||cliwait)return;
+ if(hist[hist.length-1]!==cmd)hist.push(cmd);
+ if(hist.length>50)hist.shift();
+ hpos=hist.length;hdraft='';
  cliwait=true;$('runbtn').disabled=true;
  cliAdd('> '+cmd);
  fetch('/api/cli?cmd='+encodeURIComponent(cmd),{method:'POST'}).then(function(r){
