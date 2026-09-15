@@ -34,6 +34,9 @@ _autosave-*
 
 # FreeCAD files
 *.FCStd1
+# FreeCAD writes one of these on every save, so they churn the history for
+# nothing - the .FCStd beside them is the source, and git is the backup
+*.FCBak
 
 # KiCad regenerates this from the footprint libraries on demand
 board/fp-info-cache
