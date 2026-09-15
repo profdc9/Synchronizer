@@ -87,6 +87,10 @@ bool sense_next_event(sense_event *out);
 /* Live state, for the "status" command. */
 uint16_t sense_baseline(void);
 uint16_t sense_last_sample(void);
+/* Why swings are going missing: chatter is threshold crossings that came
+   back, rejected is events the width gate threw out. */
+uint32_t sense_chatter_count(void);
+uint32_t sense_rejected_count(void);
 uint32_t sense_event_count(void);
 uint32_t sense_overrun_count(void);
 uint64_t sense_last_event_us(void);
@@ -153,6 +157,24 @@ typedef struct
 } sense_env_stats;
 
 void sense_envelope(uint32_t ms, sense_env_stats *out);
+
+/* Plot the envelope against time.  ENV gives the spread but not the shape,
+   and the shape is what says how many times per period the bob passes the
+   coil, how long each pass lasts, and whether the dip is sharp enough to
+   time.  Those are the three things the detector's windows depend on. */
+void sense_trace(uint32_t ms);
+
+/* Find the drive frequency where the bob moves the envelope most, and say
+   how much.  RESONANCE finds the tank's peak with nothing near the coil,
+   but that is not where the detector wants to sit: the bob's eddy loading
+   drags the loaded resonance down, so the steepest part of the LOADED
+   curve is below the unloaded peak, and it moves whenever the coil does.
+
+   Each point is watched for longer than a full swing, so the min and max
+   bracket a whole pass of the bob.  The peak-to-peak is the number to
+   maximise when positioning the coil - it is the entire signal budget.
+   Pass 0,0,0 for a range derived from the stored resonance and Q. */
+void sense_mod_scan(uint32_t lo_hz, uint32_t hi_hz, uint32_t steps);
 
 #ifdef __cplusplus
 }

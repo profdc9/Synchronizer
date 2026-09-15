@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  10u
+#define CONFIG_VERSION  11u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -101,6 +101,18 @@ typedef struct _synchronizer_config
   uint16_t detect_threshold;    /* ADC counts below/above baseline       */
   uint8_t  detect_falling;      /* 1 if the bob makes amplitude DROP     */
   uint8_t  sense_enabled;
+  /* Hysteresis, as a percentage of detect_threshold.  Without it, ripple
+     sitting near the threshold ends the event early and the width gate
+     then throws the whole event away - not a jittered timestamp, a lost
+     swing.  The event is only over once the excursion has fallen this far
+     BELOW the threshold.
+
+     The threshold crossings themselves stay symmetric: both edges are
+     timed at detect_threshold, and the event is timestamped at their
+     midpoint, so the timing is unaffected by how deep the dip goes.  The
+     hysteresis decides when the event has ENDED, never when it crossed. */
+  uint8_t  detect_hyst_pct;     /* 0 = none, 30 is a good starting point */
+  uint8_t  pad_det[3];
   uint32_t sample_hz;           /* envelope sampling rate                */
 
   /* Detector timing, as percentages of the expected interval between

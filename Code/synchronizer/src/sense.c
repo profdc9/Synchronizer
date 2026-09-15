@@ -39,6 +39,18 @@
    supply and thermal drift.  It is frozen while an event is in progress so
    the event cannot drag the baseline after itself. */
 #define BASELINE_SHIFT      12
+/* The envelope still carries the detector's residual carrier ripple - on
+   the development board about 34 counts peak to peak at 52 kHz, against a
+   bob signal of 170.  One conversion per tick samples that ripple at
+   whatever phase it lands on, so every sample arrives with half the ripple
+   as noise, and timing precision is noise divided by edge slope.
+
+   A conversion is ~2 us and the tick is 1000 us, so averaging a burst
+   costs nothing worth counting.  16 of them span ~32 us, close to two
+   carrier periods, which averages the ripple out rather than merely
+   thinning it. */
+#define MOD_MAX       24u   /* most points a modulation scan will take */
+#define ENV_OVERSAMPLE      16u
 
 /* The detector's three timing windows used to be fixed microsecond
    constants, which quietly assumed a fast pendulum: a seconds pendulum
@@ -70,6 +82,10 @@ static uint64_t rise_us, prev_us;
 static uint16_t prev_sample;
 static uint16_t ev_peak;
 static uint16_t ev_baseline;
+static bool     fall_pending;    /* crossed thr downward, not yet confirmed */
+static uint64_t fall_at_us;      /* when it crossed, timed at thr itself    */
+static uint32_t chatter;         /* crossings that climbed back over thr    */
+static uint32_t rejected;        /* events the width gate threw out         */
 
 /* interval history for sense_mean_interval_us */
 #define IVAL_RING 64
@@ -185,7 +201,11 @@ static bool sample_cb(repeating_timer_t *rt)
   }
 
   adc_select_input(ADC_CH_AMPLITUDE);
-  s   = (uint16_t)adc_read();
+  {
+    uint32_t acc = 0u, k;
+    for (k = 0; k < ENV_OVERSAMPLE; k++) acc += adc_read();
+    s = (uint16_t)(acc / ENV_OVERSAMPLE);
+  }
   now = time_us_64();
   last_sample = s;
 
@@ -208,32 +228,56 @@ static bool sample_cb(repeating_timer_t *rt)
     {
       int32_t pdev = cfg.detect_falling ? (base - (int32_t)prev_sample)
                                         : ((int32_t)prev_sample - base);
-      in_event    = true;
-      ev_peak     = (uint16_t)dev;
-      ev_baseline = (uint16_t)base;
-      rise_us     = cross_time(prev_us, now, pdev, dev, thr);
+      in_event     = true;
+      fall_pending = false;
+      ev_peak      = (uint16_t)dev;
+      ev_baseline  = (uint16_t)base;
+      rise_us      = cross_time(prev_us, now, pdev, dev, thr);
     }
   }
   else
   {
+    /* Hysteresis, but only on the DECISION, never on the timing.  Both
+       edges are timed at thr, so the midpoint stays immune to how deep the
+       dip went; thr_lo only decides when the event is really over.  A
+       sample that climbs back over thr in between says the crossing was
+       ripple, so the pending edge is discarded and the event continues -
+       which is the case that used to lose a whole swing to the width gate. */
+    int32_t thr_lo = thr - (thr * (int32_t)cfg.detect_hyst_pct) / 100;
+    if (thr_lo < 1) thr_lo = 1;
+
     if (dev > (int32_t)ev_peak) ev_peak = (uint16_t)dev;
 
-    if (dev < thr)
+    if (!fall_pending && dev < thr)
     {
       int32_t pdev = cfg.detect_falling ? (ev_baseline - (int32_t)prev_sample)
                                         : ((int32_t)prev_sample - ev_baseline);
-      uint64_t fall_us = cross_time(prev_us, now, pdev, dev, thr);
-      uint32_t width   = (uint32_t)(fall_us - rise_us);
+      fall_pending = true;
+      fall_at_us   = cross_time(prev_us, now, pdev, dev, thr);
+    }
+    else if (fall_pending && dev >= thr)
+    {
+      fall_pending = false;
+      chatter++;
+    }
 
-      in_event = false;
+    if (fall_pending && dev < thr_lo)
+    {
+      uint32_t width = (uint32_t)(fall_at_us - rise_us);
+
+      in_event     = false;
+      fall_pending = false;
       if (width >= win_min_event_us && width <= win_max_event_us)
         push_event(rise_us + width / 2u, ev_peak, ev_baseline, width);
+      else
+        rejected++;
     }
     else if ((now - rise_us) > win_max_event_us)
     {
       /* Stuck high - abandon the event and let the baseline re-acquire. */
-      in_event   = false;
-      baseline_q = ((int32_t)s) << BASELINE_SHIFT;
+      in_event     = false;
+      fall_pending = false;
+      baseline_q   = ((int32_t)s) << BASELINE_SHIFT;
     }
   }
 
@@ -256,6 +300,7 @@ void sense_init(void)
   adc_gpio_init(GPIO_OSC_SIGNAL);
 
   ring_head = ring_tail = ev_count = overruns = 0;
+  chatter = rejected = 0; fall_pending = false;
   baseline_q = 0; in_event = false; last_event_us = 0;
   ival_n = ival_head = 0;
   prev_us = time_us_64(); prev_sample = 0;
@@ -304,6 +349,8 @@ bool sense_next_event(sense_event *out)
 
 uint16_t sense_baseline(void)  { return (uint16_t)(baseline_q >> BASELINE_SHIFT); }
 uint16_t sense_last_sample(void) { return last_sample; }
+uint32_t sense_chatter_count(void)  { return chatter; }
+uint32_t sense_rejected_count(void) { return rejected; }
 uint32_t sense_event_count(void) { return ev_count; }
 uint32_t sense_overrun_count(void) { return overruns; }
 uint64_t sense_last_event_us(void) { return last_event_us; }
@@ -358,6 +405,132 @@ void sense_sweep(uint32_t from_hz, uint32_t to_hz, uint32_t step_hz, uint32_t dw
   tank_apply(saved);
   baseline_q = 0;
   running = was;
+}
+
+void sense_mod_scan(uint32_t lo, uint32_t hi, uint32_t steps)
+{
+  uint16_t mn[MOD_MAX], mx[MOD_MAX];
+  uint32_t hz[MOD_MAX];
+  uint32_t i, best = 0u, best_pp = 0u, window_ms;
+  uint32_t span;
+  bool     was = running;
+
+  if (steps < 3u)       steps = 9u;
+  if (steps > MOD_MAX)  steps = MOD_MAX;
+
+  if (lo == 0u || hi == 0u)
+  {
+    /* The loaded resonance sits below the unloaded one, so weight the
+       range downward: a linewidth and a half below, half a one above. */
+    uint32_t f0 = cfg.tank_f0_hz ? cfg.tank_f0_hz : tank_hz;
+    uint32_t bw = (cfg.tank_q_x10 > 10u) ? (uint32_t)(((uint64_t)f0 * 10ull)
+                                                      / cfg.tank_q_x10)
+                                         : (f0 / 40u);
+    lo = (f0 > bw + bw / 2u) ? (f0 - bw - bw / 2u) : (f0 / 2u);
+    hi = f0 + bw / 2u;
+  }
+  if (hi <= lo) { printf("bad range\r\n"); return; }
+
+  /* Longer than one swing, so a min and a max are always both inside. */
+  window_ms = (uint32_t)((cfg_period_ns() / 1000000ull) * 5ull / 4ull);
+  if (window_ms < 200u)  window_ms = 200u;
+  if (window_ms > 2500u) window_ms = 2500u;
+
+  running = false;
+  printf("modulation scan %lu..%lu hz, %lu points, %lu ms each\r\n",
+         (unsigned long)lo, (unsigned long)hi, (unsigned long)steps,
+         (unsigned long)window_ms);
+  printf("the bob must be swinging for this to mean anything\r\n\r\n");
+
+  for (i = 0; i < steps; i++)
+  {
+    sense_env_stats st;
+    hz[i] = lo + ((hi - lo) * i) / (steps - 1u);
+    watchdog_update();          /* several seconds a point outruns eight */
+    tank_apply(hz[i]);
+    sleep_ms(30);               /* let the tank and the detector settle */
+    sense_envelope(window_ms, &st);
+    mn[i] = st.min; mx[i] = st.max;
+    if ((uint32_t)(st.max - st.min) > best_pp)
+    { best_pp = (uint32_t)(st.max - st.min); best = i; }
+  }
+  watchdog_update();
+
+  span = best_pp ? best_pp : 1u;
+  printf("     hz    min    max    p-p\r\n");
+  for (i = 0; i < steps; i++)
+  {
+    uint32_t pp = (uint32_t)(mx[i] - mn[i]);
+    uint32_t k, bar = (pp * 34u) / span;
+    printf("%7lu %6u %6u %6lu |", (unsigned long)hz[i], mn[i], mx[i],
+           (unsigned long)pp);
+    for (k = 0; k < bar; k++) putchar('#');
+    printf("%s\r\n", (i == best) ? "  <-- best" : "");
+  }
+
+  running = was;
+  if (best_pp < 20u)
+  {
+    printf("\r\nnothing is moving the envelope.  Is the bob swinging?\r\n");
+    tank_apply(cfg.tank_hz);
+    return;
+  }
+  tank_apply(hz[best]);
+  cfg.tank_hz = tank_hz;
+  printf("\r\nbest %lu hz, %lu counts peak-to-peak - drive set there,"
+         " 'save' to keep it\r\n",
+         (unsigned long)tank_hz, (unsigned long)best_pp);
+}
+
+void sense_trace(uint32_t ms)
+{
+  static uint16_t tbuf[512];
+  const uint32_t n = 512u, rows = 64u;
+  uint32_t i, per_us, g;
+  uint16_t mn = 0xffffu, mx = 0u;
+  int32_t  span;
+
+  if (ms == 0u)   ms = 2000u;
+  if (ms > 3000u) ms = 3000u;      /* stay well inside the watchdog */
+  per_us = (ms * 1000u) / n;
+
+  adc_busy = true;
+  adc_select_input(ADC_CH_AMPLITUDE);
+  for (i = 0; i < n; i++)
+  {
+    uint64_t t = time_us_64();
+    tbuf[i] = (uint16_t)adc_read();
+    while ((time_us_64() - t) < (uint64_t)per_us) tight_loop_contents();
+  }
+  adc_busy = false;
+
+  for (i = 0; i < n; i++)
+  {
+    if (tbuf[i] < mn) mn = tbuf[i];
+    if (tbuf[i] > mx) mx = tbuf[i];
+  }
+  span = (int32_t)mx - (int32_t)mn;
+  if (span < 1) span = 1;
+
+  printf("envelope over %lu ms, %lu points every %lu us, range %u..%u\r\n",
+         (unsigned long)ms, (unsigned long)n, (unsigned long)per_us, mn, mx);
+  g = n / rows;
+  for (i = 0; i < rows; i++)
+  {
+    uint32_t j, lo = 0xffffu, hi = 0u;
+    int32_t  a, b;
+    for (j = i * g; j < (i + 1u) * g; j++)
+    {
+      if (tbuf[j] < lo) lo = tbuf[j];
+      if (tbuf[j] > hi) hi = tbuf[j];
+    }
+    a = ((int32_t)lo - (int32_t)mn) * 46 / span;
+    b = ((int32_t)hi - (int32_t)mn) * 46 / span;
+    printf("%6lu %5lu ", (unsigned long)((i * g * per_us) / 1000u),
+           (unsigned long)((lo + hi) / 2u));
+    for (j = 0; (int32_t)j <= b; j++) putchar(((int32_t)j >= a) ? '#' : ' ');
+    printf("\r\n");
+  }
 }
 
 void sense_envelope(uint32_t ms, sense_env_stats *out)

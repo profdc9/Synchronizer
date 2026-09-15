@@ -153,7 +153,8 @@ void config_defaults(void)
   cfg.tank_peak_adc    = 0u;
   cfg.tank_floor_adc   = 0u;
   cfg.detect_threshold = 200u;
-  cfg.detect_falling   = 1u;     /* detuning the tank lowers its impedance */
+  cfg.detect_falling   = 1u;
+  cfg.detect_hyst_pct  = 30u;     /* detuning the tank lowers its impedance */
   cfg.sense_enabled    = 1u;
   cfg.sample_hz        = 1000u;
 

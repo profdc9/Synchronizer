@@ -241,7 +241,7 @@ const char web_page[] =
   "<option value=\"HELP\"><option value=\"STATUS\"><option value=\"NET\">\n"
   "<option value=\"SYNC\">\n"
   "<option value=\"RESONANCE 20000 120000 Y\"><option value=\"SWEEP 40000 70000 250\"><option value=\"DRIVE 60\"><option value=\"DRIVE 0\">\n"
-  "<option value=\"ENV 500\">\n"
+  "<option value=\"ENV 500\"><option value=\"TRACE 2000\"><option value=\"MODSCAN 0 0 0\">\n"
   "<option value=\"CAPTURE 500000 256\"><option value=\"WATCH Y\"><option value=\"WATCH N\">\n"
   "<option value=\"MEASURE 20 Y\"><option value=\"CONTROL Y\"><option value=\"CONTROL N\">\n"
   "<option value=\"PULSE 2000\"><option value=\"COILOFF\"><option value=\"SAVE\">\n"
@@ -254,7 +254,7 @@ const char web_page[] =
   "<script>\n"
   "var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;\n"
   "var hist=[],hpos=0,hdraft='';\n"
-  "var WEBVER='8bce4e09';\n"
+  "var WEBVER='70ccd116';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -492,4 +492,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
-const char web_version[] = "8bce4e09";
+const char web_version[] = "70ccd116";

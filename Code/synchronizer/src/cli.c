@@ -147,6 +147,8 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   printf("%-22s %u (last sample %u, threshold %u, %s)\r\n", "baseline",
          sense_baseline(), sense_last_sample(), cfg.detect_threshold,
          cfg.detect_falling ? "falling" : "rising");
+  printf("%-22s %lu chatter, %lu rejected by the width gate\r\n", "",
+         (unsigned long)sense_chatter_count(), (unsigned long)sense_rejected_count());
   printf("%-22s %lu  (%lu dropped)\r\n", "events",
          (unsigned long)sense_event_count(), (unsigned long)sense_overrun_count());
 
@@ -311,6 +313,21 @@ static int sense_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+static int hyst_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  int32_t p = tp[0].ti.i;
+  (void)args; (void)v;
+  if (p < 0)  p = 0;
+  if (p > 90) p = 90;
+  cfg.detect_hyst_pct = (uint8_t)p;
+  printf("hysteresis %u%% - event ends below %lu counts, timed at %u\r\n",
+         cfg.detect_hyst_pct,
+         (unsigned long)(cfg.detect_threshold
+                         - (cfg.detect_threshold * cfg.detect_hyst_pct) / 100u),
+         cfg.detect_threshold);
+  return 1;
+}
+
 static int thresh_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
@@ -378,6 +395,21 @@ static int auth_cmd(int args, tinycl_parameter *tp, void *v)
   cfg.auth_retard_ns  = (int32_t)tp[1].ti.i;
   printf("authority: advance %ld ns, retard %ld ns per pulse\r\n",
          (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns);
+  return 1;
+}
+
+static int modscan_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  sense_mod_scan((uint32_t)tp[0].ti.i, (uint32_t)tp[1].ti.i,
+                 (uint32_t)tp[2].ti.i);
+  return 1;
+}
+
+static int trace_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  sense_trace((uint32_t)tp[0].ti.i);
   return 1;
 }
 
@@ -754,8 +786,11 @@ static const tinycl_command tcmds[] =
   { "TANK",     "hz - set tank drive frequency",          tank_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "DRIVE",    "ns - tank drive pulse width (0 = off)",   drive_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "ENV",      "ms - envelope min/mean/max over a window", env_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "TRACE",    "ms - plot the envelope against time",      trace_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "MODSCAN",  "lo hi steps - find the best drive (0 0 0)", modscan_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "SENSE",    "y|n - detector",                      sense_cmd,    {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "THRESH",   "counts - detection threshold",           thresh_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "HYST",     "pct of threshold - event-end hysteresis", hyst_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "DIR",      "y if the bob makes amplitude fall",     dir_cmd,      {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "WATCH",    "y|n - echo every swing",              watch_cmd,    {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "PULSE",    "us - fire the coil once, now",           pulse_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_END} },
