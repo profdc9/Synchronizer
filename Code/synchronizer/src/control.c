@@ -34,6 +34,11 @@
 /* An event this far from where it was expected is not the one we think it
    is; give up and re-acquire rather than lock onto nonsense. */
 #define MAX_SLIP_EVENTS     10ll
+/* A pulse has to be scheduled far enough ahead that the event has finished
+   being processed.  The sense event is timestamped at the midpoint of a dip
+   that can be a third of a period wide, so it is already old when it
+   arrives. */
+#define PULSE_LEAD_US       20000ull
 
 static control_state st = CTRL_IDLE;
 
@@ -62,10 +67,39 @@ static uint32_t acq_run;
 static uint64_t acq_prev_utc;
 
 /* MEASURE mode */
+/* An authority measurement has to separate two things a pulse does.  The
+   phase kick we want is a STEP.  But the pulse also changes the swing
+   amplitude, and amplitude changes the rate through circular error, which
+   is a RAMP - and over a few dozen pulses the ramp integrates into a phase
+   change far larger than the steps.  Subtracting a single drift snapshot
+   taken before any of it happened cannot see that coming, which is why
+   repeated measurements of the same direction came back +185 us and then
+   -41 us per pulse.
+
+   So watch the rate for a window BEFORE pulsing and again AFTER, take the
+   mean of the two as the rate that applied during, and what is left over is
+   the steps. */
+static void pts_finish(void);
+
+typedef enum { MP_NONE = 0, MP_PRE, MP_PULSE, MP_POST } meas_phase;
+static meas_phase m_phase;
+static uint32_t   m_w;              /* swings in each observation window */
+static uint32_t   m_n;              /* swings of pulsing                 */
+static uint32_t   m_left;
+static int64_t    m_e0, m_e1, m_e2, m_e3;
 static uint32_t meas_left, meas_total;
 static bool     meas_retard;
-static int64_t  meas_err0, meas_drift0;
 static uint32_t meas_fired;
+
+/* --- PTIME sweep: a MEASURE at each of several pulse placements --------- */
+#define PTS_MAX      10u
+static bool     pts_on;
+static bool     pts_retard;
+static uint32_t pts_lo, pts_hi, pts_steps, pts_i, pts_swings;
+static uint32_t pts_settle;        /* swings still to wait before the next */
+static uint32_t pts_us[PTS_MAX];
+static int64_t  pts_ns[PTS_MAX];
+static uint16_t pts_restore;
 
 static bool ev_echo;
 
@@ -142,26 +176,157 @@ control_state control_blind(void)
 
   if (st == CTRL_TRACK || st == CTRL_ACQUIRE || st == CTRL_MEASURE)
   {
-    meas_left = 0u;            /* a measurement across a gap is garbage */
+    m_phase   = MP_NONE;       /* a measurement across a gap is garbage */
+    pts_on    = false;         /* and so is a sweep built out of them    */
     st        = CTRL_HOLD;
     drive_all_off();           /* nothing queued should fire while blind */
   }
   return was;
 }
 
+/* Rate before, rate after, and what is left when the mean of the two is
+   charged against the pulsing window.  Everything in ns; err is ns. */
+static void meas_finish(void)
+{
+  int64_t rb   = (m_e1 - m_e0) / (int64_t)m_w;      /* ns of phase per swing */
+  int64_t ra   = (m_e3 - m_e2) / (int64_t)m_w;
+  int64_t rm   = (rb + ra) / 2;
+  int64_t dur  = m_e2 - m_e1;                        /* phase across pulsing */
+  int64_t ramp = rm * (int64_t)m_n;
+  int64_t kick = dur - ramp;
+  int64_t per  = meas_fired ? kick / (int64_t)meas_fired : 0;
+  int64_t mag  = (per < 0) ? -per : per;
+
+  m_phase = MP_NONE;
+  st      = CTRL_TRACK;
+
+  printf("%s authority over %lu pulses\r\n",
+         meas_retard ? "retard" : "advance", (unsigned long)meas_fired);
+  printf("   rate before %lld ns/swing, after %lld  (the pulses moved it %lld)\r\n",
+         (long long)rb, (long long)ra, (long long)(ra - rb));
+  printf("   phase across pulsing %lld us, of which %lld us was rate\r\n",
+         (long long)(dur / 1000), (long long)(ramp / 1000));
+  printf("   kick %lld us -> %lld ns per pulse\r\n",
+         (long long)(kick / 1000), (long long)per);
+
+  if (pts_on)
+  {
+    pts_us[pts_i] = pts_retard ? cfg.pulse_retard_us : cfg.pulse_advance_us;
+    pts_ns[pts_i] = per;
+    pts_i++;
+    if (pts_i >= pts_steps) pts_finish();
+    else pts_settle = 12u;          /* let the swing recover before the next */
+    return;
+  }
+
+  printf("   AUTH %lld %lld   then SAVE to keep it\r\n",
+         (long long)(meas_retard ? cfg.auth_advance_ns : mag),
+         (long long)(meas_retard ? mag : cfg.auth_retard_ns));
+}
+
+static uint32_t pts_place(uint32_t i)
+{
+  return (pts_steps < 2u) ? pts_lo
+       : pts_lo + ((pts_hi - pts_lo) * i) / (pts_steps - 1u);
+}
+
+static void pts_start_point(void)
+{
+  uint32_t us = pts_place(pts_i);
+  if (pts_retard) cfg.pulse_retard_us  = (uint16_t)us;
+  else            cfg.pulse_advance_us = (uint16_t)us;
+  printf("  %lu of %lu: placement %lu us\r\n",
+         (unsigned long)(pts_i + 1u), (unsigned long)pts_steps,
+         (unsigned long)us);
+  control_measure_authority(pts_swings, pts_retard);
+}
+
+static void pts_finish(void)
+{
+  uint32_t i, best = 0u;
+  int64_t  bestmag = 0;
+
+  pts_on = false;
+  if (pts_retard) cfg.pulse_retard_us  = pts_restore;
+  else            cfg.pulse_advance_us = pts_restore;
+
+  for (i = 0; i < pts_steps; i++)
+  {
+    int64_t m = pts_ns[i] < 0 ? -pts_ns[i] : pts_ns[i];
+    if (m > bestmag) { bestmag = m; best = i; }
+  }
+
+  printf("\r\n%s placement sweep\r\n", pts_retard ? "retard" : "advance");
+  printf("%10s %14s\r\n", "us", "ns per pulse");
+  for (i = 0; i < pts_steps; i++)
+  {
+    uint32_t k, bar = bestmag ? (uint32_t)((pts_ns[i] < 0 ? -pts_ns[i]
+                                                          : pts_ns[i]) * 30 / bestmag)
+                              : 0u;
+    printf("%10lu %14lld |", (unsigned long)pts_us[i], (long long)pts_ns[i]);
+    for (k = 0; k < bar; k++) putchar('#');
+    printf("%s\r\n", (i == best) ? "  <-- best" : "");
+  }
+  printf("placement restored to %u us.  'PTIME %u %u' then SAVE to keep the best\r\n",
+         pts_restore,
+         pts_retard ? cfg.pulse_advance_us : pts_place(best),
+         pts_retard ? pts_place(best) : cfg.pulse_retard_us);
+  printf("note the signs - a placement that changes sign is on the wrong side\r\n");
+}
+
+bool control_ptime_scan(bool retard, uint32_t lo, uint32_t hi,
+                        uint32_t steps, uint32_t swings)
+{
+  if (st != CTRL_TRACK) return false;
+  if (steps < 2u) steps = 5u;
+  if (steps > PTS_MAX) steps = PTS_MAX;
+  if (swings < 5u) swings = 40u;
+  if (swings > 200u) swings = 200u;
+  if (lo == 0u) lo = 10000u;
+  if (hi == 0u) hi = 60000u;
+  if (hi <= lo || hi > 65000u) return false;
+
+  pts_on      = true;
+  pts_retard  = retard;
+  pts_lo      = lo;
+  pts_hi      = hi;
+  pts_steps   = steps;
+  pts_swings  = swings;
+  pts_i       = 0u;
+  pts_settle  = 0u;
+  pts_restore = retard ? cfg.pulse_retard_us : cfg.pulse_advance_us;
+
+  printf("sweeping %s placement %lu..%lu us in %lu steps, %lu swings each\r\n",
+         retard ? "retard" : "advance", (unsigned long)lo, (unsigned long)hi,
+         (unsigned long)steps, (unsigned long)swings);
+  printf("this takes about %lu seconds; keep away from the clock\r\n",
+         (unsigned long)((steps * (swings + 12u) * (cfg_period_ns() / 1000000ull)) / 1000ull));
+  pts_start_point();
+  return true;
+}
+
 bool control_measure_authority(uint32_t n, bool retard)
 {
   if (st != CTRL_TRACK) return false;
   if (n == 0u || n > 500u) return false;
-  meas_left   = n;
+
+  m_n     = n;
+  m_w     = n / 2u;
+  if (m_w < 8u)  m_w = 8u;
+  if (m_w > 60u) m_w = 60u;
+  m_phase = MP_PRE;
+  m_left  = m_w;
+  m_e0    = last_err;
+
   meas_total  = n;
   meas_retard = retard;
-  meas_err0   = last_err;
-  meas_drift0 = (drift_ppb * (int64_t)event_ns_nominal()) / 1000000000ll;
   meas_fired  = 0;
   st = CTRL_MEASURE;
-  printf("measuring %s authority over %lu events\r\n",
-         retard ? "retard" : "advance", (unsigned long)n);
+  printf("measuring %s authority: %lu swings idle, %lu pulsing, %lu idle"
+         " (%lu s)\r\n",
+         retard ? "retard" : "advance", (unsigned long)m_w,
+         (unsigned long)n, (unsigned long)m_w,
+         (unsigned long)(((2u * m_w + n) * (cfg_period_ns() / 1000000ull)) / 1000ull));
   return true;
 }
 
@@ -169,22 +334,38 @@ bool control_measure_authority(uint32_t n, bool retard)
    sense event the bob reaches the DRIVE coil depends entirely on where the
    two coils were placed, so it is configuration: parts per thousand of a
    full period.  Opposite extremes is 500, the same extreme is 0, sense at
-   the centre with drive at an extreme is 250. */
+   the centre with drive at an extreme is 250.
+
+   Which DIRECTION a pulse moves the clock is not about leading or trailing
+   the bob.  An attract-only coil shifts the phase by an amount proportional
+   to -x*dv, where x is displacement from the swing's centre: the sign
+   follows which side of centre the bob is on, and has no velocity term at
+   all.  So pulsing just before the bob arrives and just after it leaves are
+   the same thing - both have the bob on the coil's side, and both retard.
+
+   Measured on the development clock, when both used to fire either side of
+   the drive coil: retard 14628 ns per pulse, "advance" 101228 ns per pulse,
+   and both with the same sign.
+
+   To advance, the coil has to pull the bob toward itself while the bob is
+   on the FAR side, which is half a period from the drive coil's turning
+   point - the sense coil's own extreme.  The bob is then accelerated toward
+   the drive coil and arrives sooner. */
 static void fire_for(const sense_event *ev, bool retard)
 {
   uint64_t period_us = cfg_period_ns() / 1000ull;
   uint64_t offset_us = (period_us * (uint64_t)cfg.drive_offset_ppt) / 1000ull;
-  uint64_t arrive    = ev->t_us + offset_us;
+  uint64_t arrive    = ev->t_us + offset_us;   /* bob at the drive coil */
   uint64_t when;
 
-  if (retard) when = arrive + cfg.pulse_retard_us;
+  if (retard)
+    when = arrive + cfg.pulse_retard_us;
   else
-  {
-    /* An advance pulse leads the arrival, and with the coils at the same
-       place that would be in the past - wait for the next period. */
-    while (arrive < ev->t_us + cfg.pulse_advance_us) arrive += period_us;
-    when = arrive - cfg.pulse_advance_us;
-  }
+    when = arrive + period_us / 2ull - cfg.pulse_advance_us;
+
+  /* Whatever that worked out to, it has to be far enough ahead to schedule. */
+  while (when < ev->t_us + PULSE_LEAD_US) when += period_us;
+
   drive_pulse_at(when, cfg.pulse_us);
 }
 
@@ -227,31 +408,30 @@ static void track_event(const sense_event *ev)
     }
   }
 
+  if (pts_on && pts_settle > 0u && st == CTRL_TRACK)
+  {
+    if (--pts_settle == 0u) pts_start_point();
+    return;
+  }
+
   if (st == CTRL_MEASURE)
   {
-    if (meas_left > 0u)
+    switch (m_phase)
     {
-      fire_for(ev, meas_retard);
-      meas_fired++;
-      meas_left--;
-      if (meas_left == 0u)
-      {
-        int64_t step   = err - meas_err0;
-        int64_t nat    = meas_drift0 * (int64_t)meas_total;
-        int64_t corr   = step - nat;
-        int64_t per    = meas_fired ? corr / (int64_t)meas_fired : 0;
-        int64_t mag = (per < 0) ? -per : per;
-        printf("%s authority: %lu pulses, phase moved %lld us, natural drift %lld us,\r\n"
-               "           corrected %lld us -> %lld ns per pulse\r\n",
-               meas_retard ? "retard" : "advance",
-               (unsigned long)meas_fired, (long long)(step / 1000),
-               (long long)(nat / 1000), (long long)(corr / 1000), (long long)per);
-        /* Offer the exact command, with the other direction left as it is. */
-        printf("           AUTH %lld %lld   then SAVE to keep it\r\n",
-               (long long)(meas_retard ? cfg.auth_advance_ns : mag),
-               (long long)(meas_retard ? mag : cfg.auth_retard_ns));
+      case MP_PRE:
+        if (--m_left == 0u) { m_e1 = err; m_phase = MP_PULSE; m_left = m_n; }
+        break;
+      case MP_PULSE:
+        fire_for(ev, meas_retard);
+        meas_fired++;
+        if (--m_left == 0u) { m_e2 = err; m_phase = MP_POST; m_left = m_w; }
+        break;
+      case MP_POST:
+        if (--m_left == 0u) { m_e3 = err; meas_finish(); }
+        break;
+      default:
         st = CTRL_TRACK;
-      }
+        break;
     }
     return;
   }

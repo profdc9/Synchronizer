@@ -111,6 +111,16 @@ void control_set_offset_ns(int64_t offset_ns);
    is the loop gain.  Run this with the loop switched off. */
 bool control_measure_authority(uint32_t swings, bool retard);
 
+/* Sweep where the pulse sits and measure the authority at each placement.
+   The turning point is a NULL for an attract-only coil mounted behind the
+   swing - with the bob directly in front the pull is purely into the case
+   and none of it is along the travel - so authority peaks some way either
+   side and 40 ms is only a guess.  This runs MEASURE at each of `steps`
+   placements between lo_us and hi_us, settling in between, and prints a
+   table.  The original placement is restored at the end. */
+bool control_ptime_scan(bool retard, uint32_t lo_us, uint32_t hi_us,
+                        uint32_t steps, uint32_t swings);
+
 const char *control_state_name(control_state s);
 
 /* Echo every detected swing to the console as it is processed.  Events are

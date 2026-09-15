@@ -483,6 +483,16 @@ static int measure_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+static int ptimescan_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  if (!control_ptime_scan(tp[0].tb.b, (uint32_t)tp[1].ti.i,
+                          (uint32_t)tp[2].ti.i, (uint32_t)tp[3].ti.i,
+                          (uint32_t)tp[4].ti.i))
+    printf("needs the loop tracking, and lo < hi <= 65000\r\n");
+  return 1;
+}
+
 static int control_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
@@ -824,6 +834,8 @@ static const tinycl_command tcmds[] =
   { "PTIME",    "advance_us retard_us - pulse placing",   ptime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "AUTH",     "advance_ns retard_ns - step one pulse buys", auth_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "MEASURE",  "swings retard(y|n) - measure that step",      measure_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
+  { "PTIMESCAN","retard(y|n) lo hi steps swings - sweep placement", ptimescan_cmd,
+                {TINYCL_PARM_BOOL, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "CONTROL",  "y|n - close the loop",                control_cmd,  {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "OFFSET",   "ms - walk the hands by this much",       offset_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "BPH",      "beats_per_hour beats_per_swing",         bph_cmd,      {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
