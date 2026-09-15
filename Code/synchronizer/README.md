@@ -103,19 +103,78 @@ gives the biggest swing.
 whole band by hand, and `CAPTURE 500000 512` dumps the amplified waveform
 from ADC1 so you can see what the LM358 is actually producing.
 
-**2. Watch the bob.** Put the coil behind the clock and:
+**2. Place the coil.** The tank peak found in step 1 is *not* where the
+detector should sit. The bob's eddy losses drag the loaded resonance
+downward, so the drive wants to be below the unloaded peak — on the
+development clock, about 270 Hz below, worth 20% more signal. That optimum
+moves whenever the coil moves, so let the board find it:
 
 ```
-WATCH Y
+MODSCAN 0 0 0
 ```
 
-Every detected swing prints. You want one event per full period — about
-every 857 ms — with a stable `peak` well above the threshold and a `width`
-of a few tens of milliseconds. Adjust with `THRESH`, and use `DIR` if the
-bob makes the amplitude rise rather than fall. `STATUS` shows the measured
-swing interval against nominal.
+It sweeps the drive, watches each frequency for longer than a full swing,
+and reports how far the bob moves the envelope. **The peak-to-peak figure is
+the entire signal budget** — maximise it by moving the coil, re-running after
+each move. It leaves the drive on the winner.
 
-**3. Get time.** 
+Geometry matters more than fine positioning. The bob's distance from a coil
+at the swing *extreme* varies by twice the amplitude; at the *centre of
+travel*, only by one amplitude. On the development clock that was 206 counts
+against 75 — nearly 3:1 in favour of the extreme. Against that, the centre
+gives two passes per period and the bob is moving fastest there. Try both;
+`TRACE` tells you which you have, since a coil at the centre shows two
+cycles per period and one at an extreme shows one.
+
+Coil diameter is a genuine compromise: sensing depth grows with coil radius,
+so too small cannot reach, while spatial resolution is also set by diameter,
+so too large smears the pass into a slow sinusoid. Comparable to the standoff
+is a good rule. Note that if the coil, the standoff and the bob's total
+travel are all of similar size — 25 mm each on the development clock — the
+bob never leaves the coil's field and the envelope is a smooth sinusoid at
+the swing frequency rather than a sharp pass. That is geometry, not
+misplacement, and it times perfectly well.
+
+**3. Set the threshold.** `THRESH` is in ADC counts of envelope excursion
+away from the tracked baseline, in the direction `DIR` selects. It decides
+three things at once, which is why the extremes are both bad:
+
+* whether a swing triggers at all,
+* how wide the event is — a low threshold means crossing near the top of the
+  dip and staying below it for most of the period,
+* and the timing precision, since both edges are timed at exactly this level
+  and precision is noise divided by the slope where they cross.
+
+Run `WATCH Y` and look at the printed `peak`, which is the excursion the bob
+actually produces. **Half of it is about right.** On the development clock,
+peak ≈ 160 counts:
+
+```
+ THRESH  events  gap median   gap sd   width   misses
+     25      17     857.3 ms     2.68   477 ms        2
+     50      19     858.3        5.19   447          0
+     90      19     856.6        2.24   324          0
+    110      19     857.4        2.53   247          0
+```
+
+At 25 the events ran 477 ms wide against the 514 ms `max_event_pct` limit,
+so one swing in ten was abandoned as stuck-high. At 90 — 56% of peak — no
+misses and the lowest jitter. Too high is bad too: near the dip's floor the
+slope flattens again and normal amplitude variation starts causing misses.
+
+`HYST` sets how far *below* the threshold the excursion must fall before the
+event is declared over. It costs nothing in timing — both edges are still
+timed at `THRESH` — and it stops ripple near the threshold from ending an
+event early, which the width gate would then throw away entirely. 30% is a
+good default; `STATUS` counts how often it saves a swing.
+
+**A warning about the diagnostics.** `ENV`, `TRACE` and `MODSCAN` take the
+ADC away from the detector while they run, so the detector is blind for
+their duration and the loop will miss those swings. That is fine when you
+are setting up, but do not leave one running and expect the loop to hold
+lock, and do not trust `measured interval` until they have aged out.
+
+**4. Get time.** 
 
 ```
 WIFI myssid mypassword
@@ -127,7 +186,7 @@ and the NTP fix count. The timebase needs a few minutes and at least two
 fixes before it starts correcting the RP2040 crystal's own error, which is
 around 30 ppm — 2.6 s/day, a quarter of what we are trying to remove.
 
-**4. Let the loop lock without acting.**
+**5. Let the loop lock without acting.**
 
 ```
 CONTROL Y
@@ -137,7 +196,7 @@ With both authorities still zero the loop tracks but never fires. Let it
 sit and watch `phase error` in `STATUS` walk at the clock's natural rate —
 about 11 s/day fast, from the audio measurement.
 
-**5. Measure the loop gain.** This is the one parameter the project does not
+**6. Measure the loop gain.** This is the one parameter the project does not
 already know:
 
 ```
@@ -166,13 +225,13 @@ SAVE
 Leaving one of them at zero is legitimate: the loop then corrects in one
 direction only, which is all a clock that consistently gains ever needs.
 
-**6. Close the loop.** With authority measured, the loop starts spending its
+**7. Close the loop.** With authority measured, the loop starts spending its
 demand in whole pulses. `STATUS` shows `undelivered credit` — the correction
 asked for but not yet paid out — and `pulses` counting up. At 11 s/day it
 needs 113 µs of retard per swing, so expect one pulse every few dozen swings,
 not one per swing.
 
-**7. Set the hands.** `OFFSET 30000` tells the loop that "on time" is 30 s
+**8. Set the hands.** `OFFSET 30000` tells the loop that "on time" is 30 s
 later than it currently thinks, and it will walk the hands there at the
 `SLEW` rate rather than jumping. Nobody touches the clock.
 
