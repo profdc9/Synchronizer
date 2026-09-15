@@ -145,7 +145,8 @@ leave it at 0 unless you want to correct for your own reaction.</div>
 <section><h2>Drive</h2>
 <table>
 <tr><td class="k">coil</td><td class="v"><span id="don" class="pill">-</span></td></tr>
-<tr><td class="k">authority</td><td class="v"><span id="dauth">-</span></td></tr>
+<tr><td class="k">authority adv</td><td class="v"><span id="dautha">-</span></td></tr>
+<tr><td class="k">authority ret</td><td class="v"><span id="dauthr">-</span></td></tr>
 <tr><td class="k">pulses</td><td class="v"><span id="dp">-</span></td></tr>
 <tr><td class="k">duty budget</td><td class="v"><span id="dbud">-</span> us</td></tr>
 </table>
@@ -155,10 +156,15 @@ leave it at 0 unless you want to correct for your own reaction.</div>
 <button onclick="cfg('pw,adv,ret')">Apply</button></div>
 <div class="row"><button onclick="act('pulse&us='+v('pw'))">Test pulse</button>
 <button onclick="act('coiloff')">Coil off</button></div>
-<div class="row"><label>authority</label><input id="auth" style="width:96px">
-<button onclick="cfg('auth')">Set ns</button>
-<button onclick="act('measure&n=20&retard=1')">Measure 20</button></div>
-<div class="note">Measure needs the loop tracking. Start with a narrow pulse and work up.</div>
+<div class="row"><label>auth ns</label><input id="authadv" style="width:82px">
+<label style="min-width:28px">ret</label><input id="authret" style="width:82px">
+<button onclick="cfg('authadv,authret')">Apply</button></div>
+<div class="row"><button onclick="act('measure&n=20&retard=0')">Measure advance</button>
+<button onclick="act('measure&n=20&retard=1')">Measure retard</button></div>
+<div class="note">Measure needs the loop tracking, and measures one direction at a time.
+The two are not equal &mdash; an attract-only coil retards far more strongly than it
+advances &mdash; so measure both, or leave the weak one at zero and let the loop correct
+in one direction only. Start with a narrow pulse and work up.</div>
 </section>
 
 <section><h2>Time</h2>
@@ -209,6 +215,7 @@ from here is visible to anyone watching it.</p>
 <option value="CAPTURE 200000 256"><option value="WATCH Y"><option value="WATCH N">
 <option value="MEASURE 20 Y"><option value="CONTROL Y"><option value="CONTROL N">
 <option value="PULSE 2000"><option value="COILOFF"><option value="SAVE">
+<option value="MEASURE 20 N"><option value="AUTH 0 4200000">
 </datalist>
 <pre id="out">Nothing run yet.</pre>
 </section>
@@ -341,10 +348,12 @@ function poll(){fetch('/api/status').then(function(r){return r.json()}).then(fun
 
  var D=d.drive,de=$('don');de.textContent=D.on?'ENERGISED':'off';
  de.className='pill '+(D.on?'bad':'off');
- t('dauth',D.auth?num(D.auth)+' ns/pulse':'not measured');
+ t('dautha',D.authadv?num(D.authadv)+' ns/pulse':'not measured');
+ t('dauthr',D.authret?num(D.authret)+' ns/pulse':'not measured');
  t('dp',num(D.pulses)+(D.refused?' ('+D.refused+' refused)':''));
  t('dbud',num(D.budget));
- fld('pw',D.pw);fld('adv',D.adv);fld('ret',D.ret);fld('auth',D.auth);
+ fld('pw',D.pw);fld('adv',D.adv);fld('ret',D.ret);
+ fld('authadv',D.authadv);fld('authret',D.authret);
 
  var C2=d.chime;
  if(C2.have){var o=C2.offset_ms/1000;

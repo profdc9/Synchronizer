@@ -151,9 +151,14 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   printf("%-22s %s\r\n", "coil", drive_is_on() ? "ON" : "off");
   printf("%-22s %u us wide, %u us advance, %u us retard\r\n", "pulse",
          cfg.pulse_us, cfg.pulse_advance_us, cfg.pulse_retard_us);
-  printf("%-22s %ld ns per pulse%s\r\n", "authority",
-         (long)cfg.pulse_authority_ns,
-         cfg.pulse_authority_ns ? "" : "   (not measured - loop cannot act)");
+  printf("%-22s advance %ld ns, retard %ld ns\r\n", "authority",
+         (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns);
+  if (!cfg.auth_advance_ns && !cfg.auth_retard_ns)
+    printf("%-22s neither measured - loop cannot act\r\n", "");
+  else if (!cfg.auth_advance_ns)
+    printf("%-22s advance not measured - can only slow the clock\r\n", "");
+  else if (!cfg.auth_retard_ns)
+    printf("%-22s retard not measured - can only speed the clock\r\n", "");
   printf("%-22s %lu fired, %lu refused, %lu us budget\r\n", "pulses",
          (unsigned long)drive_pulse_count(), (unsigned long)drive_refused_count(),
          (unsigned long)drive_budget_us());
@@ -366,8 +371,10 @@ static int ptime_cmd(int args, tinycl_parameter *tp, void *v)
 static int auth_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
-  cfg.pulse_authority_ns = (int32_t)tp[0].ti.i;
-  printf("authority %ld ns per pulse\r\n", (long)cfg.pulse_authority_ns);
+  cfg.auth_advance_ns = (int32_t)tp[0].ti.i;
+  cfg.auth_retard_ns  = (int32_t)tp[1].ti.i;
+  printf("authority: advance %ld ns, retard %ld ns per pulse\r\n",
+         (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns);
   return 1;
 }
 
@@ -713,7 +720,7 @@ static const tinycl_command tcmds[] =
   { "COILOFF",  "drop the coil and cancel pending",       coiloff_cmd,  {TINYCL_PARM_END} },
   { "PW",       "us - correction pulse width",            pw_cmd,       {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "PTIME",    "advance_us retard_us - pulse placing",   ptime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "AUTH",     "ns - phase step one pulse buys",         auth_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "AUTH",     "advance_ns retard_ns - step one pulse buys", auth_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "MEASURE",  "swings retard(y|n) - measure that step",      measure_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "CONTROL",  "y|n - close the loop",                control_cmd,  {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "OFFSET",   "ms - walk the hands by this much",       offset_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },

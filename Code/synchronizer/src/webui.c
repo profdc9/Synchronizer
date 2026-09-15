@@ -173,10 +173,11 @@ static uint32_t json_status(char *b, uint32_t n)
     cfg.acquire_events, cfg.acquire_tol_pct);
 
   u += (uint32_t)snprintf(b + u, n - u,
-    "\"drive\":{\"on\":%d,\"pw\":%u,\"adv\":%u,\"ret\":%u,\"auth\":%ld,"
+    "\"drive\":{\"on\":%d,\"pw\":%u,\"adv\":%u,\"ret\":%u,"
+      "\"authadv\":%ld,\"authret\":%ld,"
       "\"pulses\":%lu,\"refused\":%lu,\"budget\":%lu},",
     drive_is_on() ? 1 : 0, cfg.pulse_us, cfg.pulse_advance_us,
-    cfg.pulse_retard_us, (long)cfg.pulse_authority_ns,
+    cfg.pulse_retard_us, (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns,
     (unsigned long)drive_pulse_count(), (unsigned long)drive_refused_count(),
     (unsigned long)drive_budget_us());
 
@@ -316,8 +317,10 @@ static bool apply_config(const char *q)
   if (set_u32(q, "clat",   &t, 0u, 5000u))     { cfg.chime_latency_ms = t;        touched = true; }
   {
     char v[24];
-    if (http_query_get(q, "auth", v, sizeof(v)))
-    { cfg.pulse_authority_ns = (int32_t)strtol(v, NULL, 10); touched = true; }
+    if (http_query_get(q, "authadv", v, sizeof(v)))
+    { cfg.auth_advance_ns = (int32_t)strtol(v, NULL, 10); touched = true; }
+    if (http_query_get(q, "authret", v, sizeof(v)))
+    { cfg.auth_retard_ns  = (int32_t)strtol(v, NULL, 10); touched = true; }
   }
   {
     char h[CONFIG_NAME_LEN];

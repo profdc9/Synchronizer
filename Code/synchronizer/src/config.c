@@ -167,7 +167,8 @@ void config_defaults(void)
   cfg.pulse_us           = 2000u;
   cfg.pulse_advance_us   = 40000u;
   cfg.pulse_retard_us    = 40000u;
-  cfg.pulse_authority_ns = 0;     /* unknown until "authority" is run      */
+  cfg.auth_advance_ns = 0;        /* both unknown until MEASURE is run     */
+  cfg.auth_retard_ns  = 0;
 
   cfg.chime_interval_min = 60u;   /* on the hour                        */
   cfg.chime_offset_ms    = 0;

@@ -227,12 +227,16 @@ static void track_event(const sense_event *ev)
         int64_t nat    = meas_drift0 * (int64_t)meas_total;
         int64_t corr   = step - nat;
         int64_t per    = meas_fired ? corr / (int64_t)meas_fired : 0;
-        printf("authority: %lu pulses, phase moved %lld us, natural drift %lld us,\r\n"
+        int64_t mag = (per < 0) ? -per : per;
+        printf("%s authority: %lu pulses, phase moved %lld us, natural drift %lld us,\r\n"
                "           corrected %lld us -> %lld ns per pulse\r\n",
+               meas_retard ? "retard" : "advance",
                (unsigned long)meas_fired, (long long)(step / 1000),
                (long long)(nat / 1000), (long long)(corr / 1000), (long long)per);
-        printf("           'set authority %lld' then 'save' to keep it\r\n",
-               (long long)(per < 0 ? -per : per));
+        /* Offer the exact command, with the other direction left as it is. */
+        printf("           AUTH %lld %lld   then SAVE to keep it\r\n",
+               (long long)(meas_retard ? cfg.auth_advance_ns : mag),
+               (long long)(meas_retard ? mag : cfg.auth_retard_ns));
         st = CTRL_TRACK;
       }
     }
@@ -260,16 +264,22 @@ static void track_event(const sense_event *ev)
   /* --- spend the demand in whole pulses -------------------------------- */
   credit_ns += cmd_ns;
 
-  if (cfg.pulse_authority_ns > 0 && cfg.control_enabled)
+  if (cfg.control_enabled)
   {
-    int64_t a = (int64_t)cfg.pulse_authority_ns;
+    /* Positive credit means the hands are ahead and want retarding.  Each
+       direction is spent at its own measured price; a direction that has
+       not been measured simply cannot be spent, which is what lets a
+       retard-only installation still discipline a clock that gains. */
+    int64_t ar = (int64_t)cfg.auth_retard_ns;
+    int64_t aa = (int64_t)cfg.auth_advance_ns;
 
-    if (credit_ns >= a)       { fire_for(ev, true);  credit_ns -= a; }
-    else if (credit_ns <= -a) { fire_for(ev, false); credit_ns += a; }
+    if (ar > 0 && credit_ns >= ar)       { fire_for(ev, true);  credit_ns -= ar; }
+    else if (aa > 0 && credit_ns <= -aa) { fire_for(ev, false); credit_ns += aa; }
 
-    /* Never let the credit run away if the actuator is refusing pulses. */
-    if (credit_ns >  8 * a) credit_ns =  8 * a;
-    if (credit_ns < -8 * a) credit_ns = -8 * a;
+    /* Never let the credit run away if the actuator cannot or will not
+       deliver - including the case where that direction was never measured. */
+    if (ar > 0 && credit_ns >  8 * ar) credit_ns =  8 * ar;
+    if (aa > 0 && credit_ns < -8 * aa) credit_ns = -8 * aa;
   }
 }
 

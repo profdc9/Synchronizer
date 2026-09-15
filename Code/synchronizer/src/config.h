@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  6u
+#define CONFIG_VERSION  7u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -109,7 +109,13 @@ typedef struct _synchronizer_config
   uint16_t pulse_us;            /* width of one correction pulse         */
   uint16_t pulse_advance_us;    /* fire this long BEFORE expected arrival */
   uint16_t pulse_retard_us;     /* fire this long AFTER the bob leaves   */
-  int32_t  pulse_authority_ns;  /* measured phase step per pulse, ns     */
+  /* Advance and retard are NOT symmetric.  An attract-only coil retards
+     when the bob is on its side of centre and advances when the bob is at
+     the far extreme, where the field is much weaker - the two can differ
+     by an order of magnitude.  One number for both would make the loop
+     believe it had paid for a correction it never delivered. */
+  int32_t  auth_advance_ns;     /* measured phase step of an advance pulse */
+  int32_t  auth_retard_ns;      /* measured phase step of a retard pulse   */
 
   /* --- control loop ----------------------------------------------- */
   uint8_t  control_enabled;

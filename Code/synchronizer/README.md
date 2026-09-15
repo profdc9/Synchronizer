@@ -49,8 +49,8 @@ in `drive_init()` before anything else runs. Default pulse width is a timid
 2 ms — widen it once you know what the coil draws.
 
 **Nothing acts until you say so.** `control_enabled` defaults off, and the
-loop refuses to fire even when enabled until `pulse_authority_ns` has been
-measured. A fresh board will sit there sensing and telling you what it sees.
+loop refuses to fire even when enabled until the pulse authority has been
+measured, and it can only act in a direction that has been measured. A fresh board will sit there sensing and telling you what it sees.
 
 ## Bring-up, in order
 
@@ -133,7 +133,7 @@ around 30 ppm — 2.6 s/day, a quarter of what we are trying to remove.
 CONTROL Y
 ```
 
-With `pulse_authority_ns` still zero the loop tracks but never fires. Let it
+With both authorities still zero the loop tracks but never fires. Let it
 sit and watch `phase error` in `STATUS` walk at the clock's natural rate —
 about 11 s/day fast, from the audio measurement.
 
@@ -150,12 +150,23 @@ with a narrow `PW` and work up — an 18 cm pendulum stores very little
 energy, so the coil has more authority than you might expect, and it will
 disturb the swing amplitude as readily as the phase.
 
+Advance and retard are measured separately, because they are not the same
+number. An attract-only coil retards when the bob is on its side of centre
+and advances only when the bob is at the far extreme, where the field is far
+weaker — depending on where the coil sits the two can differ by more than an
+order of magnitude. Run it both ways:
+
 ```
-AUTH 4200000
+MEASURE 20 N        advance
+MEASURE 20 Y        retard
+AUTH <advance_ns> <retard_ns>
 SAVE
 ```
 
-**6. Close the loop.** With authority set, the loop starts spending its
+Leaving one of them at zero is legitimate: the loop then corrects in one
+direction only, which is all a clock that consistently gains ever needs.
+
+**6. Close the loop.** With authority measured, the loop starts spending its
 demand in whole pulses. `STATUS` shows `undelivered credit` — the correction
 asked for but not yet paid out — and `pulses` counting up. At 11 s/day it
 needs 113 µs of retard per swing, so expect one pulse every few dozen swings,
