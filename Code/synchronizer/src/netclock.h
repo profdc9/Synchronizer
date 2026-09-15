@@ -61,6 +61,9 @@ void        net_reconnect(void);        /* after credentials change */
    no serial terminal, no app. */
 
 bool        net_in_ap(void);
+/* Seconds until the rescue AP next re-tries the configured network, or 0
+   when it never will: held up by hand, or no network configured. */
+uint32_t    net_ap_retry_s(void);
 const char *net_ap_ssid(void);          /* includes the board's unique id */
 
 /* Accept credentials and go try them.  Refused unless the AP is up, so a

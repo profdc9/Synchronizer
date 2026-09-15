@@ -33,6 +33,7 @@
 #include "netclock.h"
 #include "dhcpserver.h"
 #include "dnsserver.h"
+#include "httpd.h"
 #include "lwip/apps/mdns.h"
 
 #define NTP_PORT            123
@@ -52,6 +53,8 @@
 /* Three failures in a row is what a mistyped password looks like.  Raise
    the provisioning AP rather than retrying forever with no way in. */
 #define STA_FAILS_TO_AP     3
+#define AP_RETRY_MS         60000u   /* rescue AP first re-tries this soon */
+#define AP_RETRY_MAX_MS     900000u  /* ...backing off to this between tries */
 
 static net_state    state = NET_OFF;
 static struct udp_pcb *pcb;
@@ -63,6 +66,9 @@ static uint64_t     send_us;
 static bool         waiting;
 static uint32_t     ok_count, fail_count, last_rtt;
 static absolute_time_t next_poll, wait_deadline, retry_at;
+static absolute_time_t ap_retry_at;
+static uint32_t        ap_http_mark;
+static uint32_t        ap_retry_ms = AP_RETRY_MS;
 static char         ipbuf[20];
 static bool         force_sync;
 
@@ -381,6 +387,8 @@ static void ap_start(void)
   ap_up = true;
   state = NET_AP;
   mdns_up(CYW43_ITF_AP, &mdns_on_ap);
+  ap_retry_at  = make_timeout_time_ms(ap_retry_ms);
+  ap_http_mark = httpd_requests();
 }
 
 static void ap_stop(void)
@@ -429,6 +437,7 @@ static void pending_run(void)
       config_save();
       ap_forced   = false;
       sta_fails   = 0;
+      ap_retry_ms = AP_RETRY_MS;
       ap_stop();
       state       = NET_OFF;
       have_server = false;
@@ -440,10 +449,11 @@ static void pending_run(void)
       ap_start();
       break;
     case PEND_AP_OFF:
-      ap_forced = false;
+      ap_forced   = false;
       ap_stop();
-      state     = NET_OFF;
-      sta_fails = 0;
+      state       = NET_OFF;
+      sta_fails   = 0;
+      ap_retry_ms = AP_RETRY_MS;
       retry_at  = get_absolute_time();
       break;
     default:
@@ -484,12 +494,61 @@ void net_reconnect(void)
   ap_stop();
   ap_forced   = false;
   sta_fails   = 0;
+  ap_retry_ms = AP_RETRY_MS;
   state       = NET_OFF;
   retry_at    = get_absolute_time();
   have_server = false;
 }
 
 void net_request_sync(void) { force_sync = true; }
+
+/* The setup AP is raised when the configured network cannot be joined.  A
+   wrong key looks exactly like a router that has been rebooted, and in the
+   second case the board used to sit as an access point for ever while the
+   network it wanted came back without it - healthy on serial, absent from
+   the LAN.  So put the radio back on the configured network periodically;
+   if it still will not join, the state machine raises the AP again a few
+   seconds later and we wait out another interval.
+
+   Not while somebody is using the AP: re-associating takes the radio off
+   the AP's channel, which would strand a phone midway through provisioning.
+   A lease, or any HTTP request since the last look, means hands off. */
+static void ap_retry_sta(void)
+{
+  if (ap_forced || cfg.ssid[0] == '\0') return;
+  if (absolute_time_diff_us(get_absolute_time(), ap_retry_at) > 0) return;
+
+  if (dhcpserver_leases() > 0 || httpd_requests() != ap_http_mark)
+  {
+    ap_http_mark = httpd_requests();
+    ap_retry_at  = make_timeout_time_ms(ap_retry_ms);
+    return;
+  }
+
+  /* Back off.  A network that is down for a minute deserves a prompt retry;
+     one that has been down all afternoon does not deserve a radio cycling
+     every seventy-five seconds, and each cycle re-registers the AP netif
+     under a fresh lwIP number.  Reset to the short interval the moment we
+     get back on, in net_poll(). */
+  if (ap_retry_ms < AP_RETRY_MAX_MS)
+  {
+    ap_retry_ms *= 2u;
+    if (ap_retry_ms > AP_RETRY_MAX_MS) ap_retry_ms = AP_RETRY_MAX_MS;
+  }
+
+  ap_stop();
+  state     = NET_OFF;
+  sta_fails = 0;
+  retry_at  = get_absolute_time();
+}
+
+uint32_t net_ap_retry_s(void)
+{
+  int64_t us;
+  if (!ap_up || ap_forced || cfg.ssid[0] == '\0') return 0;
+  us = absolute_time_diff_us(get_absolute_time(), ap_retry_at);
+  return (us <= 0) ? 1u : (uint32_t)(us / 1000000) + 1u;
+}
 
 void net_poll(void)
 {
@@ -500,6 +559,7 @@ void net_poll(void)
   if (ap_up)
   {
     (void)net_scan_busy();          /* let a finished scan settle */
+    ap_retry_sta();                 /* a rescue is not a destination */
     return;                         /* no NTP while we are the network */
   }
 
@@ -530,9 +590,10 @@ void net_poll(void)
 
     if (link == CYW43_LINK_UP)
     {
-      sta_fails = 0;
-      state     = NET_ONLINE;
-      next_poll = get_absolute_time();
+      sta_fails   = 0;
+      ap_retry_ms = AP_RETRY_MS;      /* the network is back; be eager again */
+      state       = NET_ONLINE;
+      next_poll   = get_absolute_time();
       power_save_off();
       set_default_route(CYW43_ITF_STA);
       mdns_up(CYW43_ITF_STA, &mdns_on_sta);

@@ -625,7 +625,15 @@ static int net_cmd(int args, tinycl_parameter *tp, void *v)
   printf("\r\n-- wifi ------------------------------------------------\r\n");
   printf("  state  %s\r\n", net_status_name());
   if (net_in_ap())
+  {
+    uint32_t again = net_ap_retry_s();
     printf("  ap     \"%s\", key \"%s\"\r\n", net_ap_ssid(), cfg.ap_pass);
+    if (again)
+      printf("  retry  \"%s\" in %lu s\r\n", cfg.ssid, (unsigned long)again);
+    else
+      printf("  retry  never - %s\r\n",
+             cfg.ssid[0] ? "held up by hand, 'ap n' to rejoin" : "no network configured");
+  }
   else
     printf("  ssid   \"%s\"\r\n", cfg.ssid);
   printf("\r\n");
