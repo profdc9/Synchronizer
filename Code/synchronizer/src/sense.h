@@ -139,6 +139,21 @@ const sense_resonance *sense_last_resonance(void);
 /* Capture the raw amplified tank waveform on ADC1 and print it. */
 void sense_capture(uint32_t rate_hz, uint32_t count);
 
+/* A spot reading of the envelope is nearly useless on its own: it is one
+   sample of a signal that carries the detector's residual carrier ripple,
+   and the baseline EMA lags any change by design.  This samples the
+   envelope flat out for a window and reports the spread, which is what you
+   want when setting the detector up - the mean tells you the level, and
+   min/max tell you how much ripple got through C9. */
+typedef struct
+{
+  uint16_t min, mean, max;
+  uint32_t samples;
+  uint32_t ms;
+} sense_env_stats;
+
+void sense_envelope(uint32_t ms, sense_env_stats *out);
+
 #ifdef __cplusplus
 }
 #endif

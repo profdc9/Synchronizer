@@ -360,6 +360,38 @@ void sense_sweep(uint32_t from_hz, uint32_t to_hz, uint32_t step_hz, uint32_t dw
   running = was;
 }
 
+void sense_envelope(uint32_t ms, sense_env_stats *out)
+{
+  uint64_t acc = 0ull, end;
+  uint32_t n = 0u;
+  uint16_t mn = 0xffffu, mx = 0u;
+
+  memset(out, '\000', sizeof(*out));
+  if (ms == 0u)   ms = 200u;
+  if (ms > 2000u) ms = 2000u;      /* the watchdog is not that patient */
+
+  /* Take the ADC off the detector for the window, the same way a scan
+     does, so its timer callback does not interleave conversions. */
+  adc_busy = true;
+  adc_select_input(ADC_CH_AMPLITUDE);
+  end = time_us_64() + (uint64_t)ms * 1000ull;
+  while (time_us_64() < end)
+  {
+    uint16_t s = (uint16_t)adc_read();
+    if (s < mn) mn = s;
+    if (s > mx) mx = s;
+    acc += s;
+    n++;
+  }
+  adc_busy = false;
+
+  out->ms      = ms;
+  out->samples = n;
+  out->min     = n ? mn : 0u;
+  out->max     = mx;
+  out->mean    = n ? (uint16_t)(acc / n) : 0u;
+}
+
 void sense_capture(uint32_t rate_hz, uint32_t count)
 {
   static uint16_t buf[2048];

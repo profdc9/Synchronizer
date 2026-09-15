@@ -381,6 +381,28 @@ static int auth_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+static int env_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  sense_env_stats st;
+  uint32_t pp;
+
+  (void)args; (void)v;
+  sense_envelope((uint32_t)tp[0].ti.i, &st);
+  if (st.samples == 0u) { printf("no samples\r\n"); return 1; }
+
+  pp = (uint32_t)st.max - (uint32_t)st.min;
+  printf("envelope over %lu ms, %lu samples (%lu k/s)\r\n",
+         (unsigned long)st.ms, (unsigned long)st.samples,
+         (unsigned long)(st.samples / (st.ms ? st.ms : 1u)));
+  printf("  min %u   mean %u   max %u   peak-to-peak %lu\r\n",
+         st.min, st.mean, st.max, (unsigned long)pp);
+  if (st.mean)
+    printf("  spread %lu.%lu%% of mean\r\n",
+           (unsigned long)((pp * 100u) / st.mean),
+           (unsigned long)(((pp * 1000u) / st.mean) % 10u));
+  return 1;
+}
+
 static int drive_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
@@ -731,6 +753,7 @@ static const tinycl_command tcmds[] =
   { "CAPTURE",  "rate_hz count - raw tank waveform",      capture_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "TANK",     "hz - set tank drive frequency",          tank_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "DRIVE",    "ns - tank drive pulse width (0 = off)",   drive_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "ENV",      "ms - envelope min/mean/max over a window", env_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "SENSE",    "y|n - detector",                      sense_cmd,    {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "THRESH",   "counts - detection threshold",           thresh_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "DIR",      "y if the bob makes amplitude fall",     dir_cmd,      {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
