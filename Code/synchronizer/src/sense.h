@@ -151,7 +151,8 @@ void sense_capture(uint32_t rate_hz, uint32_t count);
    min/max tell you how much ripple got through C9. */
 typedef struct
 {
-  uint16_t min, mean, max;
+  uint16_t min, mean, max;      /* after the detector's own filtering */
+  uint16_t raw_min, raw_max;    /* single conversions, unfiltered     */
   uint32_t samples;
   uint32_t ms;
 } sense_env_stats;

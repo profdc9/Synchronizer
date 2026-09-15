@@ -428,6 +428,11 @@ static int env_cmd(int args, tinycl_parameter *tp, void *v)
          (unsigned long)(st.samples / (st.ms ? st.ms : 1u)));
   printf("  min %u   mean %u   max %u   peak-to-peak %lu\r\n",
          st.min, st.mean, st.max, (unsigned long)pp);
+  printf("  raw %u..%u (%lu) - filtering took out %lu counts\r\n",
+         st.raw_min, st.raw_max,
+         (unsigned long)(st.raw_max - st.raw_min),
+         (unsigned long)((st.raw_max - st.raw_min) > pp
+                         ? (st.raw_max - st.raw_min) - pp : 0u));
   if (st.mean)
     printf("  spread %lu.%lu%% of mean\r\n",
            (unsigned long)((pp * 100u) / st.mean),

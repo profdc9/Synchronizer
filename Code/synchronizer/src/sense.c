@@ -51,6 +51,18 @@
    thinning it. */
 #define MOD_MAX       24u   /* most points a modulation scan will take */
 #define ENV_OVERSAMPLE      16u
+/* ...and a TRIMMED mean of that burst, not a plain one.  Two different
+   noises live here and they want different treatment.  The residual
+   carrier ripple is periodic, and averaging cancels it.  But there is also
+   impulsive noise - a 52 kHz switcher on this board and a radio a few
+   inches away - and an impulse is not additive: one outlier drags a mean
+   by its whole amplitude over N, while a trimmed mean never sees it.
+
+   Dropping ENV_TRIM from each end keeps both properties - the middle eight
+   still average the ripple down, and up to four spikes at each end are
+   discarded outright.  ENV_TRIM of 7 makes it the plain median of sixteen;
+   0 makes it the arithmetic mean. */
+#define ENV_TRIM            4u
 
 /* The detector's three timing windows used to be fixed microsecond
    constants, which quietly assumed a fast pendulum: a seconds pendulum
@@ -148,6 +160,36 @@ static void tank_apply(uint32_t hz)
   tank_hz = sysclk / (div * wrap);
 }
 
+/* One envelope reading: a burst of conversions, sorted, ends discarded,
+   middle averaged.  A conversion is ~2 us against a 1000 us tick and an
+   insertion sort of sixteen is a few hundred cycles, so the whole thing
+   disappears into the tick it runs in.  raw_mn/raw_mx, when given, collect
+   the unfiltered spread so a caller can report what the filtering bought. */
+static uint16_t env_sample_ex(uint16_t *raw_mn, uint16_t *raw_mx)
+{
+  uint16_t v[ENV_OVERSAMPLE];
+  uint32_t i, j, acc = 0u;
+
+  for (i = 0; i < ENV_OVERSAMPLE; i++)
+  {
+    v[i] = (uint16_t)adc_read();
+    if (raw_mn && v[i] < *raw_mn) *raw_mn = v[i];
+    if (raw_mx && v[i] > *raw_mx) *raw_mx = v[i];
+  }
+
+  for (i = 1u; i < ENV_OVERSAMPLE; i++)
+  {
+    uint16_t key = v[i];
+    for (j = i; j > 0u && v[j - 1u] > key; j--) v[j] = v[j - 1u];
+    v[j] = key;
+  }
+
+  for (i = ENV_TRIM; i < ENV_OVERSAMPLE - ENV_TRIM; i++) acc += v[i];
+  return (uint16_t)(acc / (ENV_OVERSAMPLE - 2u * ENV_TRIM));
+}
+
+static uint16_t env_sample(void) { return env_sample_ex(NULL, NULL); }
+
 static void push_event(uint64_t t_us, uint16_t peak, uint16_t base, uint32_t width)
 {
   uint32_t head = ring_head;
@@ -201,11 +243,7 @@ static bool sample_cb(repeating_timer_t *rt)
   }
 
   adc_select_input(ADC_CH_AMPLITUDE);
-  {
-    uint32_t acc = 0u, k;
-    for (k = 0; k < ENV_OVERSAMPLE; k++) acc += adc_read();
-    s = (uint16_t)(acc / ENV_OVERSAMPLE);
-  }
+  s   = env_sample();
   now = time_us_64();
   last_sample = s;
 
@@ -538,6 +576,7 @@ void sense_envelope(uint32_t ms, sense_env_stats *out)
   uint64_t acc = 0ull, end;
   uint32_t n = 0u;
   uint16_t mn = 0xffffu, mx = 0u;
+  uint16_t rmn = 0xffffu, rmx = 0u;
 
   memset(out, '\000', sizeof(*out));
   if (ms == 0u)   ms = 200u;
@@ -550,7 +589,9 @@ void sense_envelope(uint32_t ms, sense_env_stats *out)
   end = time_us_64() + (uint64_t)ms * 1000ull;
   while (time_us_64() < end)
   {
-    uint16_t s = (uint16_t)adc_read();
+    /* Filtered exactly as the detector filters, so what ENV reports is
+       what the detector sees - and the raw spread beside it. */
+    uint16_t s = env_sample_ex(&rmn, &rmx);
     if (s < mn) mn = s;
     if (s > mx) mx = s;
     acc += s;
@@ -563,6 +604,8 @@ void sense_envelope(uint32_t ms, sense_env_stats *out)
   out->min     = n ? mn : 0u;
   out->max     = mx;
   out->mean    = n ? (uint16_t)(acc / n) : 0u;
+  out->raw_min = n ? rmn : 0u;
+  out->raw_max = rmx;
 }
 
 void sense_capture(uint32_t rate_hz, uint32_t count)
