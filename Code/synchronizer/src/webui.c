@@ -507,8 +507,8 @@ void http_dispatch(const char *method, const char *path, const char *query,
       if (job != JOB_NONE)
       { reply_lit(out, 503, "application/json",
             "{\"err\":\"busy\"}"); return; }
-      job_lo = (uint32_t)http_query_int(query, "lo", 2000);
-      job_hi = (uint32_t)http_query_int(query, "hi", 80000);
+      job_lo = (uint32_t)http_query_int(query, "lo", 20000);
+      job_hi = (uint32_t)http_query_int(query, "hi", 120000);
       snprintf(job_msg, sizeof(job_msg), "scanning %lu-%lu hz",
                (unsigned long)job_lo, (unsigned long)job_hi);
       job = JOB_RESONANCE;

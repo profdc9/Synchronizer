@@ -142,7 +142,10 @@ void config_defaults(void)
   /* The tank frequency is a property of the coil you wind and of C3 || C4,
      so there is no meaningful default - "sweep" finds it and "save" keeps
      it.  20 kHz is only a starting point for the first sweep. */
-  cfg.tank_hz          = 20000u;
+  /* 2.5 mH sense coil against C3+C4 = 3.4 nF resonates near 54.6 kHz.
+     A different coil or capacitor lands somewhere else - RESONANCE
+     measures it and overwrites this. */
+  cfg.tank_hz          = 55000u;
   cfg.tank_f0_hz       = 0u;      /* nothing measured yet                */
   cfg.tank_q_x10       = 0u;
   cfg.tank_peak_adc    = 0u;

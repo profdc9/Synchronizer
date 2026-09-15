@@ -58,7 +58,7 @@ measured, and it can only act in a direction that has been measured. A fresh boa
 near it** — not the bob, not your hand, not a steel rule on the bench:
 
 ```
-RESONANCE 2000 80000 Y
+RESONANCE 20000 120000 Y
 ```
 
 Two passes. A coarse scan locates the peak and gauges its width, then a fine
@@ -100,7 +100,7 @@ approach and read `STATUS` at the peak and at each flank. Take whichever
 gives the biggest swing.
 
 `SWEEP 5000 60000 250` still prints a raw table if you want to look at the
-whole band by hand, and `CAPTURE 200000 512` dumps the amplified waveform
+whole band by hand, and `CAPTURE 500000 512` dumps the amplified waveform
 from ADC1 so you can see what the LM358 is actually producing.
 
 **2. Watch the bob.** Put the coil behind the clock and:
@@ -207,7 +207,7 @@ Three things to know:
   `/api/status` and fetches the output. `RESONANCE` alone blocks for three
   seconds, which an HTTP handler must not do.
 - **Output is capped at about 4 kB** and marked `[output truncated]` past
-  that. `CAPTURE 200000 256` and a full `SWEEP` both fit; larger dumps want
+  that. `CAPTURE 500000 256` and a full `SWEEP` both fit; larger dumps want
   the serial console.
 - **`WIFI` and `APKEY` are refused here.** Credentials are deliberately
   settable only over the setup access point, and letting the console set
@@ -322,7 +322,7 @@ GEOMETRY 1 500      sense events per swing, drive coil offset
 WINDOWS  35 2 60    detector windows, as % of the event interval
 LOCK     12 4       events needed to lock, gap tolerance %
 SAMPLE   1000       envelope sampling rate
-TANK     23400      tank drive frequency (RESONANCE finds this)
+TANK     55000      tank drive frequency (RESONANCE finds this)
 ```
 
 **`BPH`** is the gear ratio. `beats_per_swing` is 2 for an anchor, deadbeat

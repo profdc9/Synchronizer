@@ -157,7 +157,7 @@ const char web_page[] =
   "<tr><td class=\"k\">events</td><td class=\"v\"><span id=\"sev\">-</span></td></tr>\n"
   "<tr><td class=\"k\">windows</td><td class=\"v\"><span id=\"swin\">-</span></td></tr>\n"
   "</table>\n"
-  "<div class=\"row\"><label>scan Hz</label><input id=\"rlo\" value=\"2000\"><input id=\"rhi\" value=\"80000\">\n"
+  "<div class=\"row\"><label>scan Hz</label><input id=\"rlo\" value=\"20000\"><input id=\"rhi\" value=\"120000\">\n"
   "<button id=\"scanbtn\" class=\"p\" onclick=\"scan()\">Find resonance</button></div>\n"
   "<canvas id=\"cv\" width=\"600\" height=\"130\"></canvas>\n"
   "<div class=\"row\"><label>tank</label><input id=\"tank\">\n"
@@ -239,8 +239,8 @@ const char web_page[] =
   "<datalist id=\"cmds\">\n"
   "<option value=\"HELP\"><option value=\"STATUS\"><option value=\"NET\">\n"
   "<option value=\"SYNC\">\n"
-  "<option value=\"RESONANCE 2000 80000 Y\"><option value=\"SWEEP 5000 60000 250\">\n"
-  "<option value=\"CAPTURE 200000 256\"><option value=\"WATCH Y\"><option value=\"WATCH N\">\n"
+  "<option value=\"RESONANCE 20000 120000 Y\"><option value=\"SWEEP 40000 70000 250\">\n"
+  "<option value=\"CAPTURE 500000 256\"><option value=\"WATCH Y\"><option value=\"WATCH N\">\n"
   "<option value=\"MEASURE 20 Y\"><option value=\"CONTROL Y\"><option value=\"CONTROL N\">\n"
   "<option value=\"PULSE 2000\"><option value=\"COILOFF\"><option value=\"SAVE\">\n"
   "<option value=\"MEASURE 20 N\"><option value=\"AUTH 0 4200000\">\n"
@@ -252,7 +252,7 @@ const char web_page[] =
   "<script>\n"
   "var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;\n"
   "var hist=[],hpos=0,hdraft='';\n"
-  "var WEBVER='2d80dabf';\n"
+  "var WEBVER='efd58fd0';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -490,4 +490,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
-const char web_version[] = "2d80dabf";
+const char web_version[] = "efd58fd0";

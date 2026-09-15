@@ -249,8 +249,8 @@ static int resonance_cmd(int args, tinycl_parameter *tp, void *v)
   uint32_t lo = (uint32_t)tp[0].ti.i, hi = (uint32_t)tp[1].ti.i;
 
   (void)args; (void)v;
-  if (lo == 0u) lo = 2000u;
-  if (hi == 0u) hi = 80000u;
+  if (lo == 0u) lo = 20000u;
+  if (hi == 0u) hi = 120000u;
 
   printf("keep metal away from the sense coil - the bob, your hand, tools\r\n");
   sense_find_resonance(lo, hi, tp[2].tb.b, &r);

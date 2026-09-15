@@ -376,7 +376,7 @@ void sense_capture(uint32_t rate_hz, uint32_t count)
 /* --- resonance calibration --------------------------------------------- */
 
 #define SCAN_MAX      96u
-#define COARSE_STEPS  56u
+#define COARSE_STEPS  96u
 #define FINE_STEPS    48u
 #define ADC_FULL      4095u
 #define ADC_SAT       4000u       /* above this the envelope is clipping */
@@ -540,6 +540,24 @@ bool sense_find_resonance(uint32_t lo, uint32_t hi, bool plot, sense_resonance *
     out->q_x10 = (uint32_t)(((uint64_t)out->f0_hz * 10ull) / (uint64_t)(fhi - flo));
 
   out->valid = (scan_adc[peak] > floor_adc + 40u);
+
+  /* A coarse grid much coarser than the resonance can step over the peak,
+     and the fine window, the parabola and Q are then all built on whichever
+     shoulder happened to be sampled.  Being merely comparable to the
+     linewidth is fine - the response falls off smoothly either side, so the
+     nearest coarse sample is still the nearest one to f0.  It goes wrong
+     when the step is several linewidths and the nearest sample sits down in
+     the floor.  The final width is the first honest measurement of how wide
+     the peak is, so audit the coarse pass with it after the fact. */
+  if (out->valid && flo && fhi && fhi > flo)
+  {
+    uint32_t coarse_step = (hi - lo) / (COARSE_STEPS - 1u);
+    if (2u * (fhi - flo) < coarse_step)
+      printf("warning: the peak is %lu hz wide but the coarse scan stepped\r\n"
+             "         %lu hz - it may have missed it.  Narrow the range and\r\n"
+             "         run it again to be sure.\r\n",
+             (unsigned long)(fhi - flo), (unsigned long)coarse_step);
+  }
 
   /* --- adopt it, but only if the result is worth believing ---
 
