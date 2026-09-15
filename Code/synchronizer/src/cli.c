@@ -362,7 +362,7 @@ static int filter_cmd(int args, tinycl_parameter *tp, void *v)
   printf("%u conversions, %u trimmed each end (%s), baseline 2^%u = %lu ms\r\n",
          cfg.env_oversample, cfg.env_trim,
          (cfg.env_trim == 0u) ? "plain mean"
-           : ((cfg.env_trim * 2u + 1u >= cfg.env_oversample) ? "median" : "trimmed mean"),
+           : ((cfg.env_trim * 2u + 2u >= cfg.env_oversample) ? "median" : "trimmed mean"),
          cfg.baseline_shift, (unsigned long)(1ul << cfg.baseline_shift));
   return 1;
 }
