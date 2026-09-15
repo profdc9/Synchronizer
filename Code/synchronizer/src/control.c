@@ -470,9 +470,18 @@ static void track_event(const sense_event *ev)
     else if (aa > 0 && credit_ns <= -aa) { fire_for(ev, false); credit_ns += aa; }
 
     /* Never let the credit run away if the actuator cannot or will not
-       deliver - including the case where that direction was never measured. */
-    if (ar > 0 && credit_ns >  8 * ar) credit_ns =  8 * ar;
-    if (aa > 0 && credit_ns < -8 * aa) credit_ns = -8 * aa;
+       deliver.  A direction that was never measured has no price of its own
+       to bound it by, so borrow the other one's - otherwise the retard-only
+       case, which is a supported configuration and the one a clock that
+       gains actually needs, accumulates unbounded advance demand it can
+       never spend, and then has to work off a phantom backlog before it
+       fires again when the error finally reverses. */
+    {
+      int64_t hi = (ar > 0) ? ar : aa;
+      int64_t lo = (aa > 0) ? aa : ar;
+      if (hi > 0 && credit_ns >  8 * hi) credit_ns =  8 * hi;
+      if (lo > 0 && credit_ns < -8 * lo) credit_ns = -8 * lo;
+    }
   }
 }
 
