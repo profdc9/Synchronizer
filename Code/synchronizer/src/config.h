@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  9u
+#define CONFIG_VERSION  10u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -83,19 +83,21 @@ typedef struct _synchronizer_config
 
   /* --- sense ------------------------------------------------------ */
   uint32_t tank_hz;             /* square wave driven onto GPIO_OSCIL    */
-  /* Drive level, as PWM duty.  There is no gain trim in hardware, and the
-     tank impedance at resonance depends entirely on the coil someone
-     wound, so the only way to keep the envelope off the rail is to drive
-     it less hard.  A square wave's fundamental scales as sin(pi*duty), so
-     50% is full drive, 10% is about a third, 3% about a tenth.
+  /* Drive level, as the WIDTH of the pulse put on GPIO_OSCIL.  There is
+     no gain trim in hardware and the tank impedance depends entirely on
+     the coil someone wound, so the only way to keep the envelope off the
+     rail is to drive it less hard.
 
-     Per mille, not percent: a good tank fed through a series resistor can
-     need a few tenths of one percent before the amplifier comes off its
-     rails.  On the development coil - 2.75 mH against 3.4 nF, so
-     sqrt(L/C) = 899 ohms, fed through R5 at 10k - full drive puts volts
-     on the tank node and one percent was still five times too much. */
-  uint16_t tank_duty_permille;  /* 0..500, i.e. 0.0 .. 50.0 percent      */
-  uint8_t  pad_tank[2];
+     Nanoseconds rather than duty, because the PWM wrap changes with
+     frequency: a fixed duty is a MOVING pulse width, and the switching
+     pair has a threshold below which it does not respond at all - 56 ns
+     works on the development board, 48 ns does nothing.  Mid-scan that
+     turns an ordinary rounding step into a cliff, the drive stops, and
+     the rest of the sweep reads as floor.  A width is constant across a
+     scan by construction, and it is what the transistors react to.
+
+     Clamped to half a period, which is full drive. */
+  uint32_t tank_drive_ns;       /* 0 = no drive at all, a diagnostic     */
   uint16_t detect_threshold;    /* ADC counts below/above baseline       */
   uint8_t  detect_falling;      /* 1 if the bob makes amplitude DROP     */
   uint8_t  sense_enabled;

@@ -146,7 +146,8 @@ void config_defaults(void)
      A different coil or capacitor lands somewhere else - RESONANCE
      measures it and overwrites this. */
   cfg.tank_hz          = 55000u;
-  cfg.tank_duty_permille = 500u;  /* 50.0%: full drive, back off if it rails */
+  cfg.tank_drive_ns    = 2000u;   /* a starting point; low enough that a
+                                     good tank's peak should not clip    */
   cfg.tank_f0_hz       = 0u;      /* nothing measured yet                */
   cfg.tank_q_x10       = 0u;
   cfg.tank_peak_adc    = 0u;

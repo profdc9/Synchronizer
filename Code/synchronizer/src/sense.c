@@ -60,7 +60,9 @@ static volatile uint64_t    last_event_us;
 
 static repeating_timer_t    samp_timer;
 static uint32_t             tank_hz;
+static uint32_t             tank_div = 1u;   /* PWM clock divider in use */
 static uint                 pwm_slice, pwm_chan;
+static uint32_t             tank_level;      /* PWM counts actually set */
 
 /* in-progress event */
 static bool     in_event;
@@ -111,15 +113,21 @@ static void tank_apply(uint32_t hz)
   pwm_set_clkdiv_int_frac(pwm_slice, (uint8_t)(div > 255 ? 255 : div), 0);
   pwm_set_wrap(pwm_slice, (uint16_t)(wrap - 1u));
   {
-    uint32_t duty = cfg.tank_duty_permille;
-    uint32_t lvl;
-    if (duty > 500u) duty = 500u;
-    /* Duty 0 parks the output low - no drive at all.  That is a diagnostic,
-       not a setting: it is the only way to see what the amplifier chain does
-       with no signal, which separates a railed amplifier from a hot tank. */
-    lvl = (duty == 0u) ? 0u : (wrap * duty) / 1000u;
-    if (duty > 0u && lvl < 1u) lvl = 1u;
+    /* A width in nanoseconds, rounded - see config.h.  Zero parks the
+       output low, which is the only way to see what the amplifier does
+       with no signal at all. */
+    uint32_t lvl = 0u;
+    tank_div = div;
+    if (cfg.tank_drive_ns > 0u)
+    {
+      uint64_t counts = ((uint64_t)cfg.tank_drive_ns * (uint64_t)sysclk
+                         + 500000000ull) / 1000000000ull;
+      lvl = (uint32_t)(counts / div);
+      if (lvl < 1u)        lvl = 1u;         /* ask for drive, get a count  */
+      if (lvl > wrap / 2u) lvl = wrap / 2u;  /* half a period is full drive */
+    }
     pwm_set_chan_level(pwm_slice, pwm_chan, (uint16_t)lvl);
+    tank_level = lvl;
   }
   tank_hz = sysclk / (div * wrap);
 }
@@ -266,22 +274,22 @@ void sense_init(void)
 void sense_set_tank_hz(uint32_t hz) { tank_apply(hz); cfg.tank_hz = tank_hz; }
 uint32_t sense_tank_hz(void) { return tank_hz; }
 
-void sense_set_duty(uint16_t permille)
+void sense_set_drive_ns(uint32_t ns)
 {
-  if (permille > 500u) permille = 500u;
-  cfg.tank_duty_permille = permille;
+  cfg.tank_drive_ns = ns;
   tank_apply(tank_hz);            /* re-arm the slice with the new level */
 }
 
-uint16_t sense_duty(void) { return cfg.tank_duty_permille; }
+uint32_t sense_drive_ns(void)    { return cfg.tank_drive_ns; }
+uint32_t sense_drive_level(void) { return tank_level; }
 
-/* The PWM level actually programmed, so the console can say when the
-   requested duty has run out of timer resolution. */
-uint32_t sense_duty_level(void)
+/* What the timer will actually produce, which is not what was asked for
+   once the request is down to a few counts. */
+uint32_t sense_drive_actual_ns(void)
 {
-  uint32_t wrap = (uint32_t)pwm_hw->slice[pwm_slice].top + 1u;
-  return (cfg.tank_duty_permille == 0u) ? 0u
-         : (wrap * cfg.tank_duty_permille) / 1000u;
+  uint32_t sysclk = clock_get_hz(clk_sys);
+  return (uint32_t)(((uint64_t)tank_level * tank_div * 1000000000ull)
+                    / (uint64_t)sysclk);
 }
 void sense_enable(bool on) { running = on; if (!on) in_event = false; }
 bool sense_enabled(void) { return running; }

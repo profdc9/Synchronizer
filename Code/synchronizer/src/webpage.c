@@ -161,7 +161,7 @@ const char web_page[] =
   "<button id=\"scanbtn\" class=\"p\" onclick=\"scan()\">Find resonance</button></div>\n"
   "<canvas id=\"cv\" width=\"600\" height=\"130\"></canvas>\n"
   "<div class=\"row\"><label>tank</label><input id=\"tank\">\n"
-  "<label style=\"min-width:34px\">duty</label><input id=\"duty\" style=\"width:48px\">\n"
+  "<label style=\"min-width:44px\">drive ns</label><input id=\"duty\" style=\"width:60px\">\n"
   "<label style=\"min-width:56px\">threshold</label><input id=\"thresh\" style=\"width:56px\">\n"
   "<button onclick=\"cfg('tank,duty,thresh')\">Apply</button></div>\n"
   "<div class=\"row\"><label>bob makes</label>\n"
@@ -240,7 +240,7 @@ const char web_page[] =
   "<datalist id=\"cmds\">\n"
   "<option value=\"HELP\"><option value=\"STATUS\"><option value=\"NET\">\n"
   "<option value=\"SYNC\">\n"
-  "<option value=\"RESONANCE 20000 120000 Y\"><option value=\"SWEEP 40000 70000 250\"><option value=\"DRIVE 10\">\n"
+  "<option value=\"RESONANCE 20000 120000 Y\"><option value=\"SWEEP 40000 70000 250\"><option value=\"DRIVE 60\"><option value=\"DRIVE 0\">\n"
   "<option value=\"CAPTURE 500000 256\"><option value=\"WATCH Y\"><option value=\"WATCH N\">\n"
   "<option value=\"MEASURE 20 Y\"><option value=\"CONTROL Y\"><option value=\"CONTROL N\">\n"
   "<option value=\"PULSE 2000\"><option value=\"COILOFF\"><option value=\"SAVE\">\n"
@@ -253,7 +253,7 @@ const char web_page[] =
   "<script>\n"
   "var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;\n"
   "var hist=[],hpos=0,hdraft='';\n"
-  "var WEBVER='7fb05c4f';\n"
+  "var WEBVER='7e7b8174';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -491,4 +491,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
-const char web_version[] = "7fb05c4f";
+const char web_version[] = "7e7b8174";

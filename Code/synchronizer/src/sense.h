@@ -68,13 +68,15 @@ uint32_t sense_rearm_us(void);
 uint32_t sense_min_event_us(void);
 uint32_t sense_max_event_us(void);
 void sense_set_tank_hz(uint32_t hz);
-/* Drive level as PWM duty in PER MILLE, 0..500 (0 = no drive at all, a
-   diagnostic).  The fundamental scales as sin(pi*duty), so halving the
-   duty is not halving the drive.  A high-impedance tank can need a few
-   per mille before the amplifier comes off its rails. */
-void     sense_set_duty(uint16_t permille);
-uint16_t sense_duty(void);
-uint32_t sense_duty_level(void);   /* PWM level programmed, 0 if off */
+/* Drive level as the WIDTH of the pulse on GPIO_OSCIL, in nanoseconds.
+   0 means no drive at all, which is a diagnostic.  A width rather than a
+   duty because it stays constant as the scan moves the frequency, and
+   because the switching pair responds to width.  Clamped to half a
+   period. */
+void     sense_set_drive_ns(uint32_t ns);
+uint32_t sense_drive_ns(void);        /* what was asked for */
+uint32_t sense_drive_actual_ns(void); /* what the timer will produce */
+uint32_t sense_drive_level(void);     /* in PWM counts, 0 if off */
 uint32_t sense_tank_hz(void);
 void sense_enable(bool on);
 bool sense_enabled(void);
