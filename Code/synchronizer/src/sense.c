@@ -33,6 +33,7 @@
 #include "config.h"
 #include "sense.h"
 #include "timebase.h"
+#include "control.h"
 
 /* Baseline tracking.  At 1 kHz a shift of 12 is a time constant of about
    four seconds - long compared with the 0.2 s bump, short enough to follow
@@ -80,6 +81,7 @@ static volatile uint16_t    last_sample;
 static volatile int32_t     baseline_q;         /* baseline << BASELINE_SHIFT */
 static volatile bool        running;
 static volatile bool        adc_busy;           /* a capture owns the ADC */
+
 static volatile uint64_t    last_event_us;
 
 static repeating_timer_t    samp_timer;
@@ -189,6 +191,40 @@ static uint16_t env_sample_ex(uint16_t *raw_mn, uint16_t *raw_mx)
 }
 
 static uint16_t env_sample(void) { return env_sample_ex(NULL, NULL); }
+
+/* Every diagnostic that borrows the ADC goes through this pair.  While it
+   is borrowed the detector sees nothing, so three things have to happen:
+   the loop must be told rather than left to interpret the silence as a
+   phase excursion; the interval spanning the blind stretch must not reach
+   the rate statistics, or it reads as a wildly slow swing; and the
+   baseline must re-acquire, because a scan may well have left the drive
+   somewhere else entirely. */
+static control_state diag_was;
+
+static void sense_diag_begin(void)
+{
+  diag_was     = control_blind();
+  adc_busy     = true;
+  in_event     = false;
+  fall_pending = false;
+}
+
+static void sense_diag_end(void)
+{
+  adc_busy      = false;
+  last_event_us = 0u;      /* so the next event contributes no interval */
+  prev_us       = time_us_64();
+  prev_sample   = 0u;
+  baseline_q    = 0;       /* re-acquire; the drive may have moved */
+}
+
+const char *sense_diag_interrupted(void)
+{
+  return (diag_was == CTRL_TRACK)   ? "the loop was tracking and is now holding"
+       : (diag_was == CTRL_ACQUIRE) ? "the loop was acquiring and must start over"
+       : (diag_was == CTRL_MEASURE) ? "an authority measurement was abandoned"
+       : NULL;
+}
 
 static void push_event(uint64_t t_us, uint16_t peak, uint16_t base, uint32_t width)
 {
@@ -532,7 +568,7 @@ void sense_trace(uint32_t ms)
   if (ms > 3000u) ms = 3000u;      /* stay well inside the watchdog */
   per_us = (ms * 1000u) / n;
 
-  adc_busy = true;
+  sense_diag_begin();
   adc_select_input(ADC_CH_AMPLITUDE);
   for (i = 0; i < n; i++)
   {
@@ -540,7 +576,7 @@ void sense_trace(uint32_t ms)
     tbuf[i] = (uint16_t)adc_read();
     while ((time_us_64() - t) < (uint64_t)per_us) tight_loop_contents();
   }
-  adc_busy = false;
+  sense_diag_end();
 
   for (i = 0; i < n; i++)
   {
@@ -584,7 +620,7 @@ void sense_envelope(uint32_t ms, sense_env_stats *out)
 
   /* Take the ADC off the detector for the window, the same way a scan
      does, so its timer callback does not interleave conversions. */
-  adc_busy = true;
+  sense_diag_begin();
   adc_select_input(ADC_CH_AMPLITUDE);
   end = time_us_64() + (uint64_t)ms * 1000ull;
   while (time_us_64() < end)
@@ -597,7 +633,7 @@ void sense_envelope(uint32_t ms, sense_env_stats *out)
     acc += s;
     n++;
   }
-  adc_busy = false;
+  sense_diag_end();
 
   out->ms      = ms;
   out->samples = n;
@@ -620,7 +656,7 @@ void sense_capture(uint32_t rate_hz, uint32_t count)
   if (count == 0u)   count = 512u;
   if (rate_hz == 0u) rate_hz = 200000u;
 
-  adc_busy = true;
+  sense_diag_begin();
   adc_run(false);
   adc_fifo_drain();
   adc_select_input(ADC_CH_OSC_SIGNAL);
@@ -647,7 +683,7 @@ void sense_capture(uint32_t rate_hz, uint32_t count)
   dma_channel_unclaim(chan);
 
   adc_set_clkdiv(0);
-  adc_busy = false;
+  sense_diag_end();
   baseline_q = 0;
 
   printf("captured %lu samples at %lu hz\r\n",

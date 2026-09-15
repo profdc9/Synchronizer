@@ -26,6 +26,9 @@
 #include "pico/stdlib.h"
 #include "pico/bootrom.h"
 #include "hardware/watchdog.h"
+
+/* Defined below; every command that borrows the ADC calls it. */
+static void note_diag_cost(void);
 #include "board.h"
 #include "config.h"
 #include "sense.h"
@@ -238,6 +241,7 @@ static int sweep_cmd(int args, tinycl_parameter *tp, void *v)
   (void)args; (void)v;
   sense_sweep((uint32_t)tp[0].ti.i, (uint32_t)tp[1].ti.i,
               (uint32_t)tp[2].ti.i, 25u);
+  note_diag_cost();
   return 1;
 }
 
@@ -245,6 +249,7 @@ static int capture_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
   sense_capture((uint32_t)tp[0].ti.i, (uint32_t)tp[1].ti.i);
+  note_diag_cost();
   return 1;
 }
 
@@ -259,6 +264,7 @@ static int resonance_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("keep metal away from the sense coil - the bob, your hand, tools\r\n");
   sense_find_resonance(lo, hi, tp[2].tb.b, &r);
+  note_diag_cost();
 
   printf("\r\npeak            %lu hz\r\n", (unsigned long)r.f0_hz);
   printf("amplitude       %u counts (floor %u, rise %u)\r\n",
@@ -403,14 +409,27 @@ static int modscan_cmd(int args, tinycl_parameter *tp, void *v)
   (void)args; (void)v;
   sense_mod_scan((uint32_t)tp[0].ti.i, (uint32_t)tp[1].ti.i,
                  (uint32_t)tp[2].ti.i);
+  note_diag_cost();
   return 1;
 }
+
 
 static int trace_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
   sense_trace((uint32_t)tp[0].ti.i);
+  note_diag_cost();
   return 1;
+}
+
+/* Say what a diagnostic cost, once, in the same words everywhere.  The
+   detector is blind while the ADC is borrowed, so these commands always
+   cost some swings - the point is that it is visible rather than showing
+   up later as an inexplicable rate. */
+static void note_diag_cost(void)
+{
+  const char *what = sense_diag_interrupted();
+  if (what) printf("  (%s)\r\n", what);
 }
 
 static int env_cmd(int args, tinycl_parameter *tp, void *v)
@@ -437,6 +456,7 @@ static int env_cmd(int args, tinycl_parameter *tp, void *v)
     printf("  spread %lu.%lu%% of mean\r\n",
            (unsigned long)((pp * 100u) / st.mean),
            (unsigned long)(((pp * 1000u) / st.mean) % 10u));
+  note_diag_cost();
   return 1;
 }
 

@@ -136,6 +136,19 @@ const char *control_state_name(control_state s)
   return "?";
 }
 
+control_state control_blind(void)
+{
+  control_state was = st;
+
+  if (st == CTRL_TRACK || st == CTRL_ACQUIRE || st == CTRL_MEASURE)
+  {
+    meas_left = 0u;            /* a measurement across a gap is garbage */
+    st        = CTRL_HOLD;
+    drive_all_off();           /* nothing queued should fire while blind */
+  }
+  return was;
+}
+
 bool control_measure_authority(uint32_t n, bool retard)
 {
   if (st != CTRL_TRACK) return false;

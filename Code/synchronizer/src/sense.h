@@ -89,6 +89,8 @@ uint16_t sense_baseline(void);
 uint16_t sense_last_sample(void);
 /* Why swings are going missing: chatter is threshold crossings that came
    back, rejected is events the width gate threw out. */
+/* After a diagnostic that borrowed the ADC: what it interrupted, or NULL. */
+const char *sense_diag_interrupted(void);
 uint32_t sense_chatter_count(void);
 uint32_t sense_rejected_count(void);
 uint32_t sense_event_count(void);

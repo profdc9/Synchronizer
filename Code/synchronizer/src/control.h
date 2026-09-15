@@ -94,6 +94,14 @@ void control_poll(void);              /* call from the main loop         */
 void control_stats_get(control_stats *out);
 void control_reset(void);
 
+/* The ADC is about to be taken away for a diagnostic, so events will stop
+   arriving.  Drop to hold rather than let the silence be read as a phase
+   excursion, and abandon any authority measurement in flight, since one
+   spanning a blind stretch is meaningless.  The existing hold path
+   re-acquires by itself once events resume.  Returns what it interrupted,
+   so the diagnostic can say so. */
+control_state control_blind(void);
+
 /* Shift what the loop considers "on time", to walk the hands into
    agreement without touching them.  Applied through the same rate limit as
    everything else, so a large offset slews rather than jumps. */
