@@ -156,12 +156,12 @@ static uint32_t json_status(char *b, uint32_t n)
     (unsigned long long)mean, (long long)ppb, (long long)sday);
 
   u += (uint32_t)snprintf(b + u, n - u,
-    "\"sense\":{\"on\":%d,\"tank\":%lu,\"f0\":%lu,\"q10\":%lu,"
+    "\"sense\":{\"on\":%d,\"tank\":%lu,\"duty\":%u,\"f0\":%lu,\"q10\":%lu,"
       "\"peak\":%u,\"floor\":%u,\"base\":%u,\"last\":%u,\"thresh\":%u,"
       "\"falling\":%d,\"events\":%lu,\"dropped\":%lu,"
       "\"rearm\":%lu,\"minb\":%lu,\"maxb\":%lu,"
       "\"pct\":[%u,%u,%u],\"acq\":[%u,%u]},",
-    sense_enabled() ? 1 : 0, (unsigned long)sense_tank_hz(),
+    sense_enabled() ? 1 : 0, (unsigned long)sense_tank_hz(), sense_duty(),
     (unsigned long)cfg.tank_f0_hz, (unsigned long)cfg.tank_q_x10,
     cfg.tank_peak_adc, cfg.tank_floor_adc,
     sense_baseline(), sense_last_sample(), cfg.detect_threshold,
@@ -317,6 +317,8 @@ static bool apply_config(const char *q)
   if (set_u32(q, "clat",   &t, 0u, 5000u))     { cfg.chime_latency_ms = t;        touched = true; }
   {
     char v[24];
+    if (http_query_get(q, "duty", v, sizeof(v)))
+    { sense_set_duty((uint16_t)strtol(v, NULL, 10)); touched = true; }
     if (http_query_get(q, "authadv", v, sizeof(v)))
     { cfg.auth_advance_ns = (int32_t)strtol(v, NULL, 10); touched = true; }
     if (http_query_get(q, "authret", v, sizeof(v)))

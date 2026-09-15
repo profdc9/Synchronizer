@@ -161,8 +161,9 @@ const char web_page[] =
   "<button id=\"scanbtn\" class=\"p\" onclick=\"scan()\">Find resonance</button></div>\n"
   "<canvas id=\"cv\" width=\"600\" height=\"130\"></canvas>\n"
   "<div class=\"row\"><label>tank</label><input id=\"tank\">\n"
+  "<label style=\"min-width:34px\">duty</label><input id=\"duty\" style=\"width:48px\">\n"
   "<label style=\"min-width:56px\">threshold</label><input id=\"thresh\" style=\"width:56px\">\n"
-  "<button onclick=\"cfg('tank,thresh')\">Apply</button></div>\n"
+  "<button onclick=\"cfg('tank,duty,thresh')\">Apply</button></div>\n"
   "<div class=\"row\"><label>bob makes</label>\n"
   "<select id=\"falling\"><option value=\"1\">amplitude fall</option><option value=\"0\">amplitude rise</option></select>\n"
   "<button onclick=\"cfg('falling')\">Apply</button>\n"
@@ -239,7 +240,7 @@ const char web_page[] =
   "<datalist id=\"cmds\">\n"
   "<option value=\"HELP\"><option value=\"STATUS\"><option value=\"NET\">\n"
   "<option value=\"SYNC\">\n"
-  "<option value=\"RESONANCE 20000 120000 Y\"><option value=\"SWEEP 40000 70000 250\">\n"
+  "<option value=\"RESONANCE 20000 120000 Y\"><option value=\"SWEEP 40000 70000 250\"><option value=\"DRIVE 10\">\n"
   "<option value=\"CAPTURE 500000 256\"><option value=\"WATCH Y\"><option value=\"WATCH N\">\n"
   "<option value=\"MEASURE 20 Y\"><option value=\"CONTROL Y\"><option value=\"CONTROL N\">\n"
   "<option value=\"PULSE 2000\"><option value=\"COILOFF\"><option value=\"SAVE\">\n"
@@ -252,7 +253,7 @@ const char web_page[] =
   "<script>\n"
   "var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;\n"
   "var hist=[],hpos=0,hdraft='';\n"
-  "var WEBVER='efd58fd0';\n"
+  "var WEBVER='7fb05c4f';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -372,7 +373,7 @@ const char web_page[] =
   " t('sbase',N.base+' / '+N.last);\n"
   " t('sev',num(N.events)+(N.dropped\?' ('+N.dropped+' dropped)':''));\n"
   " t('swin',(N.rearm/1000).toFixed(0)+' / '+(N.minb/1000).toFixed(0)+'-'+(N.maxb/1000).toFixed(0)+' ms');\n"
-  " fld('tank',N.tank);fld('thresh',N.thresh);fld('falling',N.falling);\n"
+  " fld('tank',N.tank);fld('duty',N.duty);fld('thresh',N.thresh);fld('falling',N.falling);\n"
   "\n"
   " var D=d.drive,de=$('don');de.textContent=D.on\?'ENERGISED':'off';\n"
   " de.className='pill '+(D.on\?'bad':'off');\n"
@@ -490,4 +491,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
-const char web_version[] = "efd58fd0";
+const char web_version[] = "7fb05c4f";

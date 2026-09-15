@@ -68,6 +68,13 @@ uint32_t sense_rearm_us(void);
 uint32_t sense_min_event_us(void);
 uint32_t sense_max_event_us(void);
 void sense_set_tank_hz(uint32_t hz);
+/* Drive level as PWM duty in PER MILLE, 0..500 (0 = no drive at all, a
+   diagnostic).  The fundamental scales as sin(pi*duty), so halving the
+   duty is not halving the drive.  A high-impedance tank can need a few
+   per mille before the amplifier comes off its rails. */
+void     sense_set_duty(uint16_t permille);
+uint16_t sense_duty(void);
+uint32_t sense_duty_level(void);   /* PWM level programmed, 0 if off */
 uint32_t sense_tank_hz(void);
 void sense_enable(bool on);
 bool sense_enabled(void);

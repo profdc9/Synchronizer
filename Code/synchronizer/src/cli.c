@@ -132,7 +132,9 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("\r\n-- sense ------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "state", sense_enabled() ? "running" : "stopped");
-  printf("%-22s %lu hz\r\n", "tank drive", (unsigned long)sense_tank_hz());
+  printf("%-22s %lu hz at %u.%u%% duty (pwm level %lu)\r\n", "tank drive",
+         (unsigned long)sense_tank_hz(), sense_duty() / 10u, sense_duty() % 10u,
+         (unsigned long)sense_duty_level());
   if (cfg.tank_f0_hz)
     printf("%-22s %lu hz, Q %lu.%lu, peak %u over %u  (drive is %+ld hz off)\r\n",
            "tank resonance", (unsigned long)cfg.tank_f0_hz,
@@ -375,6 +377,19 @@ static int auth_cmd(int args, tinycl_parameter *tp, void *v)
   cfg.auth_retard_ns  = (int32_t)tp[1].ti.i;
   printf("authority: advance %ld ns, retard %ld ns per pulse\r\n",
          (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns);
+  return 1;
+}
+
+static int drive_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  sense_set_duty((uint16_t)tp[0].ti.i);
+  printf("tank drive %u.%u%% duty, pwm level %lu\r\n",
+         sense_duty() / 10u, sense_duty() % 10u,
+         (unsigned long)sense_duty_level());
+  if (sense_duty() > 0u && sense_duty_level() < 4u)
+    printf("  (only %lu timer counts - the next step up is a coarse one)\r\n",
+           (unsigned long)sense_duty_level());
   return 1;
 }
 
@@ -712,6 +727,7 @@ static const tinycl_command tcmds[] =
   { "SWEEP",    "from to step (hz) - raw table",            sweep_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "CAPTURE",  "rate_hz count - raw tank waveform",      capture_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "TANK",     "hz - set tank drive frequency",          tank_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "DRIVE",    "per mille - drive duty 0..500 (0 = off)", drive_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "SENSE",    "y|n - detector",                      sense_cmd,    {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "THRESH",   "counts - detection threshold",           thresh_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "DIR",      "y if the bob makes amplitude fall",     dir_cmd,      {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
