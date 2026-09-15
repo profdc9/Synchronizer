@@ -186,6 +186,7 @@ void config_defaults(void)
   cfg.kp_swings       = 4200u;    /* one hour of swings                  */
   cfg.ki_swings       = 12600u;   /* three hours                         */
   cfg.slew_limit_ppm  = 500;      /* 0.43 ms per swing, a hard ceiling   */
+  cfg.rate_kp_events  = 350u;     /* ~5 min; config.h says why not less */
 
   strncpy(cfg.ntp_host, "pool.ntp.org", CONFIG_HOST_LEN - 1);
   strncpy(cfg.ap_pass, "synchronizer", CONFIG_PASS_LEN - 1);

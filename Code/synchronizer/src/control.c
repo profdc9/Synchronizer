@@ -56,6 +56,42 @@ static uint64_t events;
 static uint32_t missed;
 
 static int64_t  integ;
+
+/* --- the pendulum's own rate, tracked --------------------------------- ---
+   drift_ppb used to come from the mean of the last 64 intervals, and a mean
+   of intervals is (t_N - t_0)/N: only the endpoints, throwing away 62 of the
+   64 samples.  At 2.27 ms of per-event timing noise that is 58 ppm, 5 s/day,
+   which is why the reported drift wandered by more than the error it was
+   meant to describe.
+
+   Instead, a second NCO that tracks the pendulum rather than UTC.  It runs
+   free at the nominal interval plus a learned rate, a type-2 loop pulls it
+   onto the measured events, and the learned rate IS the period estimate -
+   with every event contributing and the loop's whole integration behind it.
+
+   This is a measuring instrument, not a reference.  The schedule the
+   discipline loop steers against stays pinned to UTC; nothing here touches
+   it.  What it earns is feedforward: the loop can command the standing
+   correction directly instead of making its integrator rediscover a number
+   we already know.
+
+   A note on the crystal.  Both this and the phase error are measured in
+   disciplined UTC ns, so a crystal error is common-mode between them and
+   the discipline path is self-correcting.  But the cancellation is only
+   exact if the two estimators average over the same interval, and the
+   timebase learns its ppb from NTP fixes minutes apart.  A crystal
+   excursion faster than that leaks in here as apparent pendulum rate.  So
+   this loop is deliberately kept slower than the timebase's rate tracking:
+   a temperature transient the timebase has not caught yet is then mostly
+   averaged away rather than fed forward as a rate change that is not
+   really the pendulum's. */
+#define RATE_SCALE      1024ll       /* rate is carried as ns per 1024 events */
+static uint64_t rate_ns;             /* the tracking NCO's predicted event   */
+static int64_t  rate_acc;            /* its fractional accumulator           */
+static int64_t  rate_q;              /* learned offset, ns per 1024 events   */
+static bool     rate_have;
+static int64_t  ff_last;
+static uint32_t rate_n;              /* events since the tracker started     */
 static int64_t  cmd_ns;
 static int64_t  credit_ns;
 static int64_t  target_off;
@@ -142,6 +178,7 @@ void control_reset(void)
 {
   exp_ns = 0; exp_frac = 0; events = 0; missed = 0;
   integ = 0; cmd_ns = 0; credit_ns = 0;
+  rate_have = false; rate_q = 0; rate_acc = 0; rate_n = 0;
   last_err = 0; filt_err = 0; drift_ppb = 0;
   acq_run = 0; acq_prev_utc = 0;
   meas_left = 0; meas_fired = 0;
@@ -396,16 +433,38 @@ static void track_event(const sense_event *ev)
   events++;
   exp_advance(1);
 
-  /* A running estimate of how far the pendulum itself is off nominal,
-     which is what the loop is having to cancel. */
+  /* --- the tracking NCO ------------------------------------------------
+     Type 2: a proportional pull on the phase and an integral on the rate.
+     kp is the phase time constant in events, and ki = 2*kp*kp puts the
+     damping near 0.7, so the rate settles in roughly 2*kp events without
+     ringing. */
   {
-    uint64_t mean_us = sense_mean_interval_us(64);
-    if (mean_us)
+    int64_t nom = (int64_t)event_ns_nominal();
+    int64_t kp  = (int64_t)(cfg.rate_kp_events ? cfg.rate_kp_events : 350u);
+    int64_t ki  = 2ll * kp * kp;
+    int64_t rerr;
+
+    if (!rate_have)
     {
-      int64_t nom = (int64_t)event_ns_nominal();
-      int64_t got = (int64_t)mean_us * 1000ll;
-      drift_ppb = ((got - nom) * 1000000000ll) / nom;
+      rate_ns = ev->utc_ns; rate_acc = 0; rate_q = 0; rate_n = 0;
+      rate_have = true;
     }
+    else
+    {
+      /* advance, then measure how far off the prediction landed */
+      rate_acc += rate_q;
+      rate_ns  += (uint64_t)(nom + rate_acc / RATE_SCALE);
+      rate_acc -= (rate_acc / RATE_SCALE) * RATE_SCALE;
+
+      rerr = (int64_t)ev->utc_ns - (int64_t)rate_ns;
+
+      rate_ns = (uint64_t)((int64_t)rate_ns + rerr / kp);   /* phase pull  */
+      rate_q += (rerr * RATE_SCALE) / ki;                   /* rate learn  */
+      if (rate_n < 0xffffffffu) rate_n++;
+    }
+
+    /* The learned offset, as parts per billion of the nominal interval. */
+    drift_ppb = (rate_q * 1000000000ll) / (RATE_SCALE * nom);
   }
 
   if (pts_on && pts_settle > 0u && st == CTRL_TRACK)
@@ -445,10 +504,18 @@ static void track_event(const sense_event *ev)
     int64_t ki = (int64_t)(cfg.ki_swings ? cfg.ki_swings : 12600u);
     int64_t p, i;
 
+    /* Feedforward first: we have measured what the pendulum is doing, so
+       command the standing correction rather than making the integrator
+       find it again.  Only used once the tracker has had time to settle -
+       before that it is still swinging toward the answer. */
+    int64_t ff = (rate_have && rate_n > 4u * (cfg.rate_kp_events ? cfg.rate_kp_events : 350u))
+                 ? -(rate_q / RATE_SCALE) : 0;
+    ff_last = ff;
+
     integ += err;
     p = -err / kp;
     i = -integ / (ki * ki);
-    cmd_ns = p + i;
+    cmd_ns = ff + p + i;
 
     if (cmd_ns > limit)  { cmd_ns = limit;  integ -= err; }   /* anti-windup */
     if (cmd_ns < -limit) { cmd_ns = -limit; integ -= err; }
@@ -566,6 +633,10 @@ void control_stats_get(control_stats *o)
   o->cmd_ns_per_swing = cmd_ns;
   o->credit_ns        = credit_ns;
   o->drift_ppb        = drift_ppb;
+  o->ff_ns            = ff_last;
+  o->rate_n           = rate_n;
+  o->rate_ready       = (uint8_t)((rate_have && rate_n >
+      4u * (cfg.rate_kp_events ? cfg.rate_kp_events : 350u)) ? 1u : 0u);
   o->pulses           = drive_pulse_count();
   o->missed           = missed;
   o->target_offset_ns = target_off;

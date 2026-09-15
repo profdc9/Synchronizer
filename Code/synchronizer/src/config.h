@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  11u
+#define CONFIG_VERSION  12u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -154,6 +154,19 @@ typedef struct _synchronizer_config
   uint32_t kp_swings;
   uint32_t ki_swings;
   int32_t  slew_limit_ppm;      /* cap on commanded rate correction      */
+
+  /* Phase time constant, in events, of the NCO that tracks the PENDULUM -
+     not the one the discipline loop steers against.  Its learned rate is
+     the period estimate and the loop's feedforward term.
+
+     Longer than it needs to be on purpose.  The estimate is only as good as
+     the timebase it is measured against, and the timebase learns the
+     crystal's rate from NTP fixes minutes apart.  A crystal excursion
+     faster than that has not been corrected yet and would show up here as
+     an apparent pendulum rate change; averaging over longer than the
+     timebase's own settling leaves most of it behind.  350 events is about
+     five minutes on a seconds-ish pendulum, which buys roughly 1 ppm. */
+  uint32_t rate_kp_events;
 
   /* --- the chime ---------------------------------------------------
 

@@ -228,7 +228,11 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   print_ns("command per swing", cs.cmd_ns_per_swing);
   print_ns("undelivered credit", cs.credit_ns);
   print_ns("hand offset target", cs.target_offset_ns);
-  printf("%-22s %lld ppb\r\n", "pendulum drift", (long long)cs.drift_ppb);
+  printf("%-22s %lld ppb  (%lld ms/day)\r\n", "pendulum drift",
+         (long long)cs.drift_ppb, (long long)(cs.drift_ppb * 864ll / 10000ll));
+  printf("%-22s %lld us per swing%s  (%lu events)\r\n", "feedforward",
+         (long long)(cs.ff_ns / 1000), cs.rate_ready ? "" : " - still settling",
+         (unsigned long)cs.rate_n);
   printf("%-22s kp %lu events, ki %lu events, slew %ld ppm\r\n", "gains",
          (unsigned long)cfg.kp_swings, (unsigned long)cfg.ki_swings,
          (long)cfg.slew_limit_ppm);

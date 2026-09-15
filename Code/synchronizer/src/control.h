@@ -83,6 +83,9 @@ typedef struct _control_stats
   int64_t  cmd_ns_per_swing;  /* current controller output               */
   int64_t  credit_ns;         /* undelivered correction                  */
   int64_t  drift_ppb;         /* measured pendulum error vs nominal      */
+  int64_t  ff_ns;             /* feedforward part of the command         */
+  uint32_t rate_n;            /* events the rate tracker has seen        */
+  uint8_t  rate_ready;        /* 1 once feedforward is being applied     */
   uint32_t pulses;
   uint32_t missed;            /* events the detector did not report      */
   int64_t  target_offset_ns;  /* deliberate offset of the hands          */
