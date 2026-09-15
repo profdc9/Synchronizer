@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  12u
+#define CONFIG_VERSION  13u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -167,6 +167,23 @@ typedef struct _synchronizer_config
      timebase's own settling leaves most of it behind.  350 events is about
      five minutes on a seconds-ish pendulum, which buys roughly 1 ppm. */
   uint32_t rate_kp_events;
+
+  /* Detector filtering.  These were compile-time until the clock was about
+     to go back to its own room, where changing them means fetching the
+     board.  env_oversample conversions are taken per tick, sorted, and
+     env_trim discarded from each end before averaging - trim of half the
+     count minus one is a plain median, zero is an arithmetic mean.
+
+     The trim is the one most likely to want changing in place: a drive coil
+     pulsing a few inches from the sense coil is a far bigger impulsive
+     source than anything on the board, and impulses are what trimming is
+     for.  baseline_shift is the detector baseline's EMA, 2^n milliseconds,
+     and wants raising if the baseline ever slides toward the mean of a
+     swinging signal instead of sitting at its quiescent level. */
+  uint8_t  env_oversample;      /* 4..32 conversions per tick            */
+  uint8_t  env_trim;            /* dropped from each end, < half of that */
+  uint8_t  baseline_shift;      /* EMA time constant, 2^n ms             */
+  uint8_t  pad_env;
 
   /* --- the chime ---------------------------------------------------
 

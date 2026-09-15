@@ -157,6 +157,8 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("\r\n-- sense ------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "state", sense_enabled() ? "running" : "stopped");
+  printf("%-22s %u of %u conversions trimmed, baseline 2^%u ms\r\n", "filter",
+         cfg.env_trim, cfg.env_oversample, cfg.baseline_shift);
   printf("%-22s %lu hz, pulse %lu ns (%lu counts, %lu ns actual)\r\n", "tank drive",
          (unsigned long)sense_tank_hz(), (unsigned long)sense_drive_ns(),
          (unsigned long)sense_drive_level(),
@@ -342,6 +344,26 @@ static int sense_cmd(int args, tinycl_parameter *tp, void *v)
   cfg.sense_enabled = tp[0].tb.b ? 1u : 0u;
   sense_enable(tp[0].tb.b);
   printf("sense %s\r\n", sense_enabled() ? "on" : "off");
+  return 1;
+}
+
+static int filter_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  cfg.env_oversample = (uint8_t)tp[0].ti.i;
+  cfg.env_trim       = (uint8_t)tp[1].ti.i;
+  cfg.baseline_shift = (uint8_t)tp[2].ti.i;
+  if (cfg.env_oversample < 4u)  cfg.env_oversample = 4u;
+  if (cfg.env_oversample > 32u) cfg.env_oversample = 32u;
+  if (cfg.env_trim * 2u >= cfg.env_oversample)
+    cfg.env_trim = (uint8_t)((cfg.env_oversample - 1u) / 2u);
+  if (cfg.baseline_shift < 6u)  cfg.baseline_shift = 6u;
+  if (cfg.baseline_shift > 20u) cfg.baseline_shift = 20u;
+  printf("%u conversions, %u trimmed each end (%s), baseline 2^%u = %lu ms\r\n",
+         cfg.env_oversample, cfg.env_trim,
+         (cfg.env_trim == 0u) ? "plain mean"
+           : ((cfg.env_trim * 2u + 1u >= cfg.env_oversample) ? "median" : "trimmed mean"),
+         cfg.baseline_shift, (unsigned long)(1ul << cfg.baseline_shift));
   return 1;
 }
 
@@ -852,6 +874,7 @@ static const tinycl_command tcmds[] =
   { "SENSE",    "y|n - detector",                      sense_cmd,    {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "THRESH",   "counts - detection threshold",           thresh_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "HYST",     "pct of threshold - event-end hysteresis", hyst_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "FILTER",   "oversample trim baseline_shift",          filter_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "DIR",      "y if the bob makes amplitude fall",     dir_cmd,      {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "WATCH",    "y|n - echo every swing",              watch_cmd,    {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "PULSE",    "us - fire the coil once, now",           pulse_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_END} },

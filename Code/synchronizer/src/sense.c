@@ -39,7 +39,14 @@
    four seconds - long compared with the 0.2 s bump, short enough to follow
    supply and thermal drift.  It is frozen while an event is in progress so
    the event cannot drag the baseline after itself. */
-#define BASELINE_SHIFT      12
+#define BASELINE_SHIFT      12        /* the ceiling; cfg.baseline_shift rules */
+#define ENV_MAX             32u       /* the burst array; cfg sizes the use */
+
+static inline uint32_t env_shift(void)
+{
+  uint32_t s = cfg.baseline_shift;
+  return (s < 6u) ? 6u : ((s > 20u) ? 20u : s);
+}
 /* The envelope still carries the detector's residual carrier ripple - on
    the development board about 34 counts peak to peak at 52 kHz, against a
    bob signal of 170.  One conversion per tick samples that ripple at
@@ -78,7 +85,7 @@ static volatile sense_event ring[SENSE_RING];
 static volatile uint32_t    ring_head, ring_tail;
 static volatile uint32_t    ev_count, overruns;
 static volatile uint16_t    last_sample;
-static volatile int32_t     baseline_q;         /* baseline << BASELINE_SHIFT */
+static volatile int32_t     baseline_q;         /* baseline << env_shift() */
 static volatile bool        running;
 static volatile bool        adc_busy;           /* a capture owns the ADC */
 
@@ -169,25 +176,30 @@ static void tank_apply(uint32_t hz)
    the unfiltered spread so a caller can report what the filtering bought. */
 static uint16_t env_sample_ex(uint16_t *raw_mn, uint16_t *raw_mx)
 {
-  uint16_t v[ENV_OVERSAMPLE];
+  uint16_t v[ENV_MAX];
+  uint32_t n = cfg.env_oversample, t = cfg.env_trim;
   uint32_t i, j, acc = 0u;
 
-  for (i = 0; i < ENV_OVERSAMPLE; i++)
+  if (n < 4u)       n = 4u;
+  if (n > ENV_MAX)  n = ENV_MAX;
+  if (t * 2u >= n)  t = (n - 1u) / 2u;      /* always leave at least one */
+
+  for (i = 0; i < n; i++)
   {
     v[i] = (uint16_t)adc_read();
     if (raw_mn && v[i] < *raw_mn) *raw_mn = v[i];
     if (raw_mx && v[i] > *raw_mx) *raw_mx = v[i];
   }
 
-  for (i = 1u; i < ENV_OVERSAMPLE; i++)
+  for (i = 1u; i < n; i++)
   {
     uint16_t key = v[i];
     for (j = i; j > 0u && v[j - 1u] > key; j--) v[j] = v[j - 1u];
     v[j] = key;
   }
 
-  for (i = ENV_TRIM; i < ENV_OVERSAMPLE - ENV_TRIM; i++) acc += v[i];
-  return (uint16_t)(acc / (ENV_OVERSAMPLE - 2u * ENV_TRIM));
+  for (i = t; i < n - t; i++) acc += v[i];
+  return (uint16_t)(acc / (n - 2u * t));
 }
 
 static uint16_t env_sample(void) { return env_sample_ex(NULL, NULL); }
@@ -283,8 +295,8 @@ static bool sample_cb(repeating_timer_t *rt)
   now = time_us_64();
   last_sample = s;
 
-  if (baseline_q == 0) baseline_q = ((int32_t)s) << BASELINE_SHIFT;
-  base = baseline_q >> BASELINE_SHIFT;
+  if (baseline_q == 0) baseline_q = ((int32_t)s) << env_shift();
+  base = baseline_q >> env_shift();
 
   /* Signed excursion in the direction the bob is expected to push it. */
   dev = cfg.detect_falling ? (base - (int32_t)s) : ((int32_t)s - base);
@@ -294,8 +306,8 @@ static bool sample_cb(repeating_timer_t *rt)
   {
     {
       /* Signed, or a sample below the baseline wraps and the filter blows up. */
-      int32_t e = (((int32_t)s) << BASELINE_SHIFT) - baseline_q;
-      baseline_q += e >> BASELINE_SHIFT;
+      int32_t e = (((int32_t)s) << env_shift()) - baseline_q;
+      baseline_q += e >> env_shift();
     }
 
     if (dev >= thr && (last_event_us == 0u || (now - last_event_us) > win_rearm_us))
@@ -351,7 +363,7 @@ static bool sample_cb(repeating_timer_t *rt)
       /* Stuck high - abandon the event and let the baseline re-acquire. */
       in_event     = false;
       fall_pending = false;
-      baseline_q   = ((int32_t)s) << BASELINE_SHIFT;
+      baseline_q   = ((int32_t)s) << env_shift();
     }
   }
 
@@ -421,7 +433,7 @@ bool sense_next_event(sense_event *out)
   return true;
 }
 
-uint16_t sense_baseline(void)  { return (uint16_t)(baseline_q >> BASELINE_SHIFT); }
+uint16_t sense_baseline(void)  { return (uint16_t)(baseline_q >> env_shift()); }
 uint16_t sense_last_sample(void) { return last_sample; }
 uint32_t sense_chatter_count(void)  { return chatter; }
 uint32_t sense_rejected_count(void) { return rejected; }
