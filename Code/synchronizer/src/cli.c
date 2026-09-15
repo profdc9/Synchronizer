@@ -260,6 +260,8 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   printf("%-22s kp %lu events, ki %lu events, slew %ld ppm\r\n", "gains",
          (unsigned long)cfg.kp_swings, (unsigned long)cfg.ki_swings,
          (long)cfg.slew_limit_ppm);
+  printf("%-22s %lu events\r\n", "rate tracker kp",
+         (unsigned long)cfg.rate_kp_events);
   printf("\r\n");
   return 1;
 }
@@ -498,8 +500,8 @@ static int env_cmd(int args, tinycl_parameter *tp, void *v)
   printf("  raw %u..%u (%lu) - filtering took out %lu counts\r\n",
          st.raw_min, st.raw_max,
          (unsigned long)(st.raw_max - st.raw_min),
-         (unsigned long)((st.raw_max - st.raw_min) > pp
-                         ? (st.raw_max - st.raw_min) - pp : 0u));
+         (unsigned long)((uint32_t)(st.raw_max - st.raw_min) > pp
+                         ? (uint32_t)(st.raw_max - st.raw_min) - pp : 0u));
   if (st.mean)
     printf("  spread %lu.%lu%% of mean\r\n",
            (unsigned long)((pp * 100u) / st.mean),
@@ -526,8 +528,7 @@ static int drive_cmd(int args, tinycl_parameter *tp, void *v)
 static int measure_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
-  if (!control_measure_authority((uint32_t)tp[0].ti.i, tp[1].tb.b))
-    printf("needs the loop tracking first, and 1..500 swings\r\n");
+  control_measure_authority((uint32_t)tp[0].ti.i, tp[1].tb.b);
   return 1;
 }
 
@@ -639,6 +640,26 @@ static int gains_cmd(int args, tinycl_parameter *tp, void *v)
   cfg.ki_swings = (uint32_t)tp[1].ti.i;
   printf("kp %lu swings, ki %lu swings\r\n",
          (unsigned long)cfg.kp_swings, (unsigned long)cfg.ki_swings);
+  return 1;
+}
+
+/* The pendulum rate tracker's own time constant.  It has to stay slower
+   than the timebase's NTP rate learning or a crystal temperature excursion
+   the timebase has not caught yet is fed forward as pendulum rate, so this
+   wants raising rather than lowering if the reported drift ever moves with
+   the room. */
+static int ratekp_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  uint32_t n = (uint32_t)tp[0].ti.i;
+  (void)args; (void)v;
+  if (n < 20u)    n = 20u;
+  if (n > 20000u) n = 20000u;
+  cfg.rate_kp_events = n;
+  control_reset();
+  printf("rate tracker kp %lu events (~%lu s); tracker restarted, and\r\n"
+         "MEASURE will not run again until it has settled\r\n",
+         (unsigned long)n,
+         (unsigned long)(((uint64_t)n * (cfg_period_ns() / 1000000ull)) / 1000ull));
   return 1;
 }
 
@@ -882,7 +903,7 @@ static const tinycl_command tcmds[] =
   { "PW",       "us - correction pulse width",            pw_cmd,       {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "PTIME",    "advance_us retard_us - pulse placing",   ptime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "AUTH",     "advance_ns retard_ns - step one pulse buys", auth_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "MEASURE",  "swings retard(y|n) - measure that step",      measure_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
+  { "MEASURE",  "pulses retard(y|n) - authority, takes 3x that many swings", measure_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "PTIMESCAN","retard(y|n) lo hi steps swings - sweep placement", ptimescan_cmd,
                 {TINYCL_PARM_BOOL, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "CONTROL",  "y|n - close the loop",                control_cmd,  {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
@@ -894,6 +915,7 @@ static const tinycl_command tcmds[] =
   { "SAMPLE",   "hz - envelope sampling rate",            sample_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "GAINS",    "kp_swings ki_swings",                    gains_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "SLEW",     "ppm - cap on rate correction",           slew_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "RATEKP",   "events - rate tracker time constant",    ratekp_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "WIFI",     "ssid password  (quote if spaces)",                          wifi_cmd,     {TINYCL_PARM_STR, TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "NTP",      "hostname",                               ntp_cmd,      {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "SYNC",     "ask for an NTP exchange now",            sync_cmd,     {TINYCL_PARM_END} },

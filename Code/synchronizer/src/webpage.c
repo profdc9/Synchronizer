@@ -243,9 +243,12 @@ const char web_page[] =
   "<option value=\"RESONANCE 20000 120000 Y\"><option value=\"SWEEP 40000 70000 250\"><option value=\"DRIVE 60\"><option value=\"DRIVE 0\">\n"
   "<option value=\"ENV 500\"><option value=\"TRACE 2000\"><option value=\"MODSCAN 0 0 0\">\n"
   "<option value=\"CAPTURE 500000 256\"><option value=\"WATCH Y\"><option value=\"WATCH N\">\n"
-  "<option value=\"MEASURE 20 Y\"><option value=\"CONTROL Y\"><option value=\"CONTROL N\">\n"
+  "<option value=\"MEASURE 60 Y\"><option value=\"MEASURE 60 N\"><option value=\"MEASURE 200 Y\">\n"
+  "<option value=\"PTIMESCAN Y 10000 60000 5 60\"><option value=\"PTIMESCAN N 10000 60000 5 60\">\n"
+  "<option value=\"CONTROL Y\"><option value=\"CONTROL N\">\n"
   "<option value=\"PULSE 2000\"><option value=\"COILOFF\"><option value=\"SAVE\">\n"
-  "<option value=\"MEASURE 20 N\"><option value=\"AUTH 0 4200000\">\n"
+  "<option value=\"AUTH 0 4200000\"><option value=\"RATEKP 350\"><option value=\"FILTER 16 4 12\">\n"
+  "<option value=\"HYST 30\"><option value=\"PTIME 20000 20000\">\n"
   "</datalist>\n"
   "<pre id=\"out\">Nothing run yet.</pre>\n"
   "</section>\n"
@@ -255,7 +258,7 @@ const char web_page[] =
   "var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;\n"
   "var hist=[],hpos=0,hdraft='';\n"
   "var logcur=-1;\n"
-  "var WEBVER='e19b4178';\n"
+  "var WEBVER='1328766d';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -507,4 +510,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
-const char web_version[] = "e19b4178";
+const char web_version[] = "1328766d";

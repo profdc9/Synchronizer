@@ -114,7 +114,27 @@ static uint64_t acq_prev_utc;
 
    So watch the rate for a window BEFORE pulsing and again AFTER, take the
    mean of the two as the rate that applied during, and what is left over is
-   the steps. */
+   the steps.
+
+   Two things make that actually work, and neither was here at first.
+
+   The signal is the tracking NCO's residual, not the phase error against
+   UTC.  During a measurement the NCO stops learning and stops being pulled,
+   so it free-runs at the rate it had learned before any of this started: a
+   flywheel the pulses cannot move.  What is left in the residual is exactly
+   what the pulses put in, with the pendulum's own rate already subtracted
+   and no curvature from the discipline loop hunting underneath.  A pulse's
+   phase kick is then a step in that residual and its amplitude effect a
+   change of slope - separated by construction rather than by fitting after
+   the fact.
+
+   And each window is fitted by least squares rather than read off its
+   endpoints.  With 2.27 ms of per-event timing noise and a kick of tens of
+   microseconds, endpoint differencing is hopeless - it was why the same
+   measurement came back with different answers.  A fit over N samples
+   estimates the level to sigma/sqrt(N) and the slope to sigma*sqrt(12/N^3),
+   and it also hands back the residual RMS, so the measurement can report
+   its own error bar instead of leaving the reader to guess. */
 static void pts_finish(void);
 
 typedef enum { MP_NONE = 0, MP_PRE, MP_PULSE, MP_POST } meas_phase;
@@ -122,10 +142,100 @@ static meas_phase m_phase;
 static uint32_t   m_w;              /* swings in each observation window */
 static uint32_t   m_n;              /* swings of pulsing                 */
 static uint32_t   m_left;
-static int64_t    m_e0, m_e1, m_e2, m_e3;
-static uint32_t meas_left, meas_total;
+static int64_t    meas_resid;       /* coasting NCO's residual, ns       */
 static bool     meas_retard;
 static uint32_t meas_fired;
+
+/* Straight-line least squares over y(k) = c + m*k, k = 0..n-1.  Slopes are
+   carried as ns per THOUSAND events: the real thing is a fraction of a
+   nanosecond per event and integer division would throw all of it away. */
+typedef struct { uint32_t n; int64_t sy, sny, syy; } meas_fit;
+static meas_fit m_f0, m_f1;         /* the before and after windows      */
+
+static void fit_reset(meas_fit *f) { f->n = 0u; f->sy = 0; f->sny = 0; f->syy = 0; }
+
+static void fit_add(meas_fit *f, int64_t y)
+{
+  f->sy  += y;
+  f->sny += (int64_t)f->n * y;
+  f->syy += y * y;
+  f->n++;
+}
+
+static int64_t isqrt64(int64_t v)
+{
+  int64_t x, y;
+  if (v <= 0) return 0;
+  x = v; y = (x + 1) / 2;
+  while (y < x) { x = y; y = (x + v / x) / 2; }
+  return x;
+}
+
+static int64_t fit_slope(const meas_fit *f)   /* ns per 1000 events */
+{
+  int64_t n = (int64_t)f->n;
+  if (n < 2) return 0;
+  return (1000ll * (12ll * f->sny - 6ll * (n - 1ll) * f->sy)) / (n * (n * n - 1ll));
+}
+
+/* The fitted line, at half-event resolution so it can be evaluated on the
+   boundary BETWEEN two events.  k2 is twice the sample index and is meant
+   to run outside the window - extrapolating to the edges of the pulsing
+   interval is the whole point of fitting. */
+static int64_t fit_at(const meas_fit *f, int64_t k2)
+{
+  int64_t n = (int64_t)f->n;
+  if (n < 1) return 0;
+  if (n < 2) return f->sy;
+  return f->sy / n + (fit_slope(f) * (k2 - (n - 1ll))) / 2000ll;
+}
+
+/* RMS of the residuals about the fit: the per-event timing noise, which is
+   what every error bar below is built out of. */
+static int64_t fit_sigma(const meas_fit *f)
+{
+  int64_t n = (int64_t)f->n, m, sse, sxx;
+  if (n < 3) return 0;
+  m   = fit_slope(f) / 1000ll;
+  sxx = (n * (n * n - 1ll)) / 12ll;
+  sse = f->syy - (f->sy / n) * f->sy - m * m * sxx;
+  if (sse < 0) sse = 0;
+  return isqrt64(sse / (n - 2ll));
+}
+
+/* One sigma on the per-pulse kick.
+
+   Written out, the whole estimate collapses to something simple: the two
+   window MEANS, differenced, minus the mean of the two slopes times the
+   centre-to-centre separation W+M.  The extrapolations to the edges of the
+   pulsing interval and the ramp charged against it are the same slope term
+   twice, and they add rather than being independent - which is why treating
+   them separately understated the error bar.
+
+   var = sigma^2 * [ 2/W + 6(W+M)^2 / (W(W^2-1)) ], and the bracket is
+   carried in parts per million so it can stay in integers. */
+static int64_t meas_kick_sd(int64_t sigma, uint32_t w, uint32_t m)
+{
+  int64_t W = (int64_t)w, M = (int64_t)m, b;
+  if (W < 3 || M < 1) return 0;
+  b  = 2000000ll / W;
+  b += (6000000ll * (W + M) * (W + M)) / (W * (W * W - 1ll));
+  return (sigma * isqrt64(b)) / (1000ll * M);
+}
+
+/* One sigma on the RATE change, in ppb.  Two independent slopes, each with
+   variance sigma^2*12/(W^3-W), so the difference carries sqrt(24/(W^3-W)) -
+   and that falls only as W^(3/2), which is why a window long enough to
+   measure the kick to a few percent still puts the rate change deep in the
+   noise.  It is printed with this beside it rather than left to look like
+   a measurement it is not. */
+static int64_t meas_rate_sd_ppb(int64_t sigma, uint32_t w, int64_t nom)
+{
+  int64_t W = (int64_t)w, k;
+  if (W < 3 || nom <= 0) return 0;
+  k = isqrt64(24000000000000ll / (W * W * W - W));   /* sqrt(24/(W^3-W))*1e6 */
+  return (sigma * k) / (nom / 1000ll);
+}
 
 /* --- PTIME sweep: a MEASURE at each of several pulse placements --------- */
 #define PTS_MAX      10u
@@ -134,7 +244,10 @@ static bool     pts_retard;
 static uint32_t pts_lo, pts_hi, pts_steps, pts_i, pts_swings;
 static uint32_t pts_settle;        /* swings still to wait before the next */
 static uint32_t pts_us[PTS_MAX];
-static int64_t  pts_ns[PTS_MAX];
+static int64_t  pts_ns[PTS_MAX];   /* kick, signed, ns per pulse           */
+static int64_t  pts_sd[PTS_MAX];   /* and its one sigma                    */
+static int64_t  pts_ppb[PTS_MAX];  /* what the pulsing did to the RATE     */
+static int64_t  pts_ppbsd[PTS_MAX];
 static uint16_t pts_restore;
 
 static bool ev_echo;
@@ -181,7 +294,9 @@ void control_reset(void)
   rate_have = false; rate_q = 0; rate_acc = 0; rate_n = 0;
   last_err = 0; filt_err = 0; drift_ppb = 0;
   acq_run = 0; acq_prev_utc = 0;
-  meas_left = 0; meas_fired = 0;
+  meas_fired = 0; meas_resid = 0; m_phase = MP_NONE;
+  pts_on = false; pts_settle = 0;
+  fit_reset(&m_f0); fit_reset(&m_f1);
   if (st == CTRL_TRACK || st == CTRL_MEASURE) st = CTRL_ACQUIRE;
 }
 
@@ -221,44 +336,79 @@ control_state control_blind(void)
   return was;
 }
 
-/* Rate before, rate after, and what is left when the mean of the two is
-   charged against the pulsing window.  Everything in ns; err is ns. */
-static void meas_finish(void)
+/* Fit the before and after windows, extrapolate each to its edge of the
+   pulsing interval, charge the mean of the two slopes against the interval,
+   and what is left is the kick.
+
+   utc_ns re-anchors the tracking NCO on the way out: it has been coasting
+   through the measurement on purpose, and the pulses really did move the
+   pendulum, so its phase is genuinely stale by the end.  The learned RATE
+   is kept - it is still the best estimate we have, and it is what the
+   coasting depended on. */
+static void meas_finish(uint64_t utc_ns)
 {
-  int64_t rb   = (m_e1 - m_e0) / (int64_t)m_w;      /* ns of phase per swing */
-  int64_t ra   = (m_e3 - m_e2) / (int64_t)m_w;
-  int64_t rm   = (rb + ra) / 2;
-  int64_t dur  = m_e2 - m_e1;                        /* phase across pulsing */
-  int64_t ramp = rm * (int64_t)m_n;
-  int64_t kick = dur - ramp;
+  int64_t W    = (int64_t)m_w;
+  int64_t M    = (int64_t)m_n;
+  int64_t s0   = fit_slope(&m_f0);                 /* ns per 1000 events   */
+  int64_t s1   = fit_slope(&m_f1);
+  int64_t pre  = fit_at(&m_f0, 2ll * W - 1ll);     /* just before pulse 1  */
+  int64_t post = fit_at(&m_f1, -1ll);              /* just after pulse M   */
+  int64_t ramp = ((s0 + s1) * M) / 2000ll;
+  int64_t kick = post - pre - ramp;
   int64_t per  = meas_fired ? kick / (int64_t)meas_fired : 0;
+  int64_t sig  = (fit_sigma(&m_f0) + fit_sigma(&m_f1)) / 2;
+  int64_t sd   = meas_kick_sd(sig, m_w, meas_fired);
+  int64_t nom  = (int64_t)event_ns_nominal();
+  int64_t ppb  = nom ? ((s1 - s0) * 1000000ll) / nom : 0;
   int64_t mag  = (per < 0) ? -per : per;
+  /* Positive phase error means the event came late, so a RETARD pulse
+     should push the kick positive and an ADVANCE pulse negative.  This is
+     the number that says whether the pulse did the job asked of it, and it
+     is the only one worth ranking or reporting an AUTH from. */
+  int64_t good = meas_retard ? per : -per;
 
   m_phase = MP_NONE;
   st      = CTRL_TRACK;
+  rate_ns = utc_ns;
+  rate_acc = 0;
 
   printf("%s authority over %lu pulses\r\n",
          meas_retard ? "retard" : "advance", (unsigned long)meas_fired);
-  printf("   rate before %lld ns/swing, after %lld  (the pulses moved it %lld)\r\n",
-         (long long)rb, (long long)ra, (long long)(ra - rb));
+  printf("   event noise %lld us; windows of %lu swings either side\r\n",
+         (long long)(sig / 1000), (unsigned long)m_w);
+  printf("   rate before %lld, after %lld ns per 1000 swings"
+         "  (moved %lld +/- %lld ppb)\r\n",
+         (long long)s0, (long long)s1, (long long)ppb,
+         (long long)meas_rate_sd_ppb(sig, m_w, nom));
   printf("   phase across pulsing %lld us, of which %lld us was rate\r\n",
-         (long long)(dur / 1000), (long long)(ramp / 1000));
-  printf("   kick %lld us -> %lld ns per pulse\r\n",
-         (long long)(kick / 1000), (long long)per);
+         (long long)((post - pre) / 1000), (long long)(ramp / 1000));
+  printf("   kick %lld us -> %lld +/- %lld ns per pulse\r\n",
+         (long long)(kick / 1000), (long long)per, (long long)sd);
 
   if (pts_on)
   {
-    pts_us[pts_i] = pts_retard ? cfg.pulse_retard_us : cfg.pulse_advance_us;
-    pts_ns[pts_i] = per;
+    pts_us[pts_i]  = pts_retard ? cfg.pulse_retard_us : cfg.pulse_advance_us;
+    pts_ns[pts_i]  = per;
+    pts_sd[pts_i]  = sd;
+    pts_ppb[pts_i] = ppb;
+    pts_ppbsd[pts_i] = meas_rate_sd_ppb(sig, m_w, nom);
     pts_i++;
     if (pts_i >= pts_steps) pts_finish();
     else pts_settle = 12u;          /* let the swing recover before the next */
     return;
   }
 
-  printf("   AUTH %lld %lld   then SAVE to keep it\r\n",
-         (long long)(meas_retard ? cfg.auth_advance_ns : mag),
-         (long long)(meas_retard ? mag : cfg.auth_retard_ns));
+  if (good <= 0)
+    printf("   WRONG SIGN: this placement %s the clock.  the pulse is on the\r\n"
+           "   other side of the bob's turning point from where it needs to be\r\n",
+           meas_retard ? "advanced" : "retarded");
+  else if (good < 2 * sd)
+    printf("   but that is inside the noise - run it again with more swings\r\n"
+           "   before believing it\r\n");
+  else
+    printf("   AUTH %lld %lld   then SAVE to keep it\r\n",
+           (long long)(meas_retard ? cfg.auth_advance_ns : mag),
+           (long long)(meas_retard ? mag : cfg.auth_retard_ns));
 }
 
 static uint32_t pts_place(uint32_t i)
@@ -275,13 +425,26 @@ static void pts_start_point(void)
   printf("  %lu of %lu: placement %lu us\r\n",
          (unsigned long)(pts_i + 1u), (unsigned long)pts_steps,
          (unsigned long)us);
-  control_measure_authority(pts_swings, pts_retard);
+  if (!control_measure_authority(pts_swings, pts_retard))
+  {
+    pts_on = false;
+    if (pts_retard) cfg.pulse_retard_us  = pts_restore;
+    else            cfg.pulse_advance_us = pts_restore;
+    printf("sweep abandoned; placement restored to %u us\r\n", pts_restore);
+  }
 }
 
+/* Rank by what the sweep was asked to produce, not by how big the number
+   came out.  A retard sweep wants the most POSITIVE kick and an advance
+   sweep the most negative; ranking on magnitude picks whichever placement
+   was furthest from doing its job as enthusiastically as the one that did
+   it best, and on this clock it did exactly that - the winner was a
+   sign-flipped outlier on the wrong side of the turning point. */
 static void pts_finish(void)
 {
   uint32_t i, best = 0u;
-  int64_t  bestmag = 0;
+  int64_t  bestgood = 0, span = 0;
+  bool     have = false;
 
   pts_on = false;
   if (pts_retard) cfg.pulse_retard_us  = pts_restore;
@@ -289,32 +452,74 @@ static void pts_finish(void)
 
   for (i = 0; i < pts_steps; i++)
   {
-    int64_t m = pts_ns[i] < 0 ? -pts_ns[i] : pts_ns[i];
-    if (m > bestmag) { bestmag = m; best = i; }
+    int64_t g = pts_retard ? pts_ns[i] : -pts_ns[i];
+    int64_t a = (g < 0) ? -g : g;
+    if (!have || g > bestgood) { bestgood = g; best = i; have = true; }
+    if (a > span) span = a;
   }
 
   printf("\r\n%s placement sweep\r\n", pts_retard ? "retard" : "advance");
-  printf("%10s %14s\r\n", "us", "ns per pulse");
+  printf("%10s %12s %9s %9s   %s\r\n",
+         "us", "ns/pulse", "+/-", "rate ppb", "wrong <-- | --> working");
   for (i = 0; i < pts_steps; i++)
   {
-    uint32_t k, bar = bestmag ? (uint32_t)((pts_ns[i] < 0 ? -pts_ns[i]
-                                                          : pts_ns[i]) * 30 / bestmag)
-                              : 0u;
-    printf("%10lu %14lld |", (unsigned long)pts_us[i], (long long)pts_ns[i]);
-    for (k = 0; k < bar; k++) putchar('#');
-    printf("%s\r\n", (i == best) ? "  <-- best" : "");
+    /* The bar is drawn in the USEFUL direction: right is the sweep doing
+       what it was asked, left is a placement pushing the clock the other
+       way.  Sign is the thing being looked for here, so it has to be the
+       thing the picture shows. */
+    int64_t  g = pts_retard ? pts_ns[i] : -pts_ns[i];
+    int64_t  a = (g < 0) ? -g : g;
+    uint32_t k, len = (uint32_t)(span ? (a * 14) / span : 0);
+    char     bar[32];
+
+    memset(bar, ' ', sizeof(bar) - 1u); bar[sizeof(bar) - 1u] = '\0';
+    bar[15] = '|';
+    if (len > 14u) len = 14u;
+    for (k = 1u; k <= len; k++) bar[15 + (g < 0 ? -(int)k : (int)k)] = '#';
+
+    printf("%10lu %12lld %9lld %9lld   [%s]%s\r\n",
+           (unsigned long)pts_us[i], (long long)pts_ns[i],
+           (long long)pts_sd[i], (long long)pts_ppb[i], bar,
+           (i == best && bestgood > 0) ? "  <-- best" : "");
   }
-  printf("placement restored to %u us.  'PTIME %u %u' then SAVE to keep the best\r\n",
-         pts_restore,
-         pts_retard ? cfg.pulse_advance_us : pts_place(best),
-         pts_retard ? pts_place(best) : cfg.pulse_retard_us);
-  printf("note the signs - a placement that changes sign is on the wrong side\r\n");
+
+  printf("placement restored to %u us.\r\n", pts_restore);
+
+  if (bestgood <= 0)
+    printf("nothing in this range worked in the intended direction - every\r\n"
+           "placement %s the clock.  the pulse is on the wrong side of the\r\n"
+           "bob's turning point; sweep the other one instead\r\n",
+           pts_retard ? "advanced" : "retarded");
+  else
+  {
+    if (bestgood < 2 * pts_sd[best])
+      printf("the best of them is inside its own error bar; repeat with more\r\n"
+             "swings per point before trusting the ranking\r\n");
+    printf("'PTIME %u %u' then SAVE to keep the best\r\n",
+           pts_retard ? cfg.pulse_advance_us : pts_place(best),
+           pts_retard ? pts_place(best) : cfg.pulse_retard_us);
+  }
+  printf("rate ppb is what the pulsing did to the pendulum's RATE - the\r\n"
+         "amplitude side of the trade, in quadrature with the kick.  its own\r\n"
+         "error is about %lld ppb here, and falls only as swings^1.5, so read\r\n"
+         "it as a hint about which placement is gentler, not as a number\r\n",
+         (long long)pts_ppbsd[best]);
 }
 
 bool control_ptime_scan(bool retard, uint32_t lo, uint32_t hi,
                         uint32_t steps, uint32_t swings)
 {
   if (st != CTRL_TRACK) return false;
+  /* Every point in the sweep is a MEASURE, so the same precondition holds;
+     check it here rather than letting the banner print and the first point
+     abandon the sweep. */
+  if (!rate_have || rate_n < (cfg.rate_kp_events ? cfg.rate_kp_events : 350u))
+  {
+    printf("the rate tracker has not settled yet - %lu of %lu swings\r\n",
+           (unsigned long)rate_n,
+           (unsigned long)(cfg.rate_kp_events ? cfg.rate_kp_events : 350u));
+    return false;
+  }
   if (steps < 2u) steps = 5u;
   if (steps > PTS_MAX) steps = PTS_MAX;
   if (swings < 5u) swings = 40u;
@@ -344,18 +549,45 @@ bool control_ptime_scan(bool retard, uint32_t lo, uint32_t hi,
 
 bool control_measure_authority(uint32_t n, bool retard)
 {
-  if (st != CTRL_TRACK) return false;
-  if (n == 0u || n > 500u) return false;
+  uint32_t kp = cfg.rate_kp_events ? cfg.rate_kp_events : 350u;
 
+  if (st != CTRL_TRACK)
+  {
+    printf("the loop has to be tracking first; it is %s\r\n",
+           control_state_name(st));
+    return false;
+  }
+  if (n == 0u || n > 500u) { printf("1..500 pulses\r\n"); return false; }
+
+  /* The measurement coasts on the tracking NCO's learned rate, so there has
+     to BE one.  Measuring before the tracker has settled charges the
+     pendulum's unknown rate against the pulses and calls the difference
+     authority, which is how this came back with a different answer every
+     time it was run. */
+  if (!rate_have || rate_n < kp)
+  {
+    printf("the rate tracker has not settled yet - %lu of %lu swings.\r\n"
+           "about %lu s to go; STATUS shows it as 'rate n'\r\n",
+           (unsigned long)rate_n, (unsigned long)kp,
+           (unsigned long)(((uint64_t)(kp - (rate_have ? rate_n : 0u))
+                            * (cfg_period_ns() / 1000000ull)) / 1000ull));
+    return false;
+  }
+
+  /* Equal thirds.  The error bar goes as (W+M)/(M*sqrt(W^3)) for windows of
+     W and a pulsing run of M, and for a fixed total number of swings that
+     is flattest at W = M - within a few percent of optimal anywhere near
+     it, and a factor of two better than the half-length windows this used
+     to run.  So a MEASURE of n pulses costs 3n swings and says so. */
   m_n     = n;
-  m_w     = n / 2u;
-  if (m_w < 8u)  m_w = 8u;
-  if (m_w > 60u) m_w = 60u;
+  m_w     = n;
+  if (m_w < 8u)   m_w = 8u;
+  if (m_w > 500u) m_w = 500u;
   m_phase = MP_PRE;
   m_left  = m_w;
-  m_e0    = last_err;
+  fit_reset(&m_f0);
+  fit_reset(&m_f1);
 
-  meas_total  = n;
   meas_retard = retard;
   meas_fired  = 0;
   st = CTRL_MEASURE;
@@ -457,10 +689,18 @@ static void track_event(const sense_event *ev)
       rate_acc -= (rate_acc / RATE_SCALE) * RATE_SCALE;
 
       rerr = (int64_t)ev->utc_ns - (int64_t)rate_ns;
+      meas_resid = rerr;
 
-      rate_ns = (uint64_t)((int64_t)rate_ns + rerr / kp);   /* phase pull  */
-      rate_q += (rerr * RATE_SCALE) / ki;                   /* rate learn  */
-      if (rate_n < 0xffffffffu) rate_n++;
+      /* Through a measurement the NCO is the instrument, not the subject.
+         Neither correction is applied, so it free-runs on the rate it had
+         already learned and the pulses cannot pull it; meas_resid is then
+         the phase the pulses put in, with the pendulum's own rate gone. */
+      if (st != CTRL_MEASURE)
+      {
+        rate_ns = (uint64_t)((int64_t)rate_ns + rerr / kp); /* phase pull  */
+        rate_q += (rerr * RATE_SCALE) / ki;                 /* rate learn  */
+        if (rate_n < 0xffffffffu) rate_n++;
+      }
     }
 
     /* The learned offset, as parts per billion of the nominal interval. */
@@ -478,15 +718,17 @@ static void track_event(const sense_event *ev)
     switch (m_phase)
     {
       case MP_PRE:
-        if (--m_left == 0u) { m_e1 = err; m_phase = MP_PULSE; m_left = m_n; }
+        fit_add(&m_f0, meas_resid);
+        if (--m_left == 0u) { m_phase = MP_PULSE; m_left = m_n; }
         break;
       case MP_PULSE:
         fire_for(ev, meas_retard);
         meas_fired++;
-        if (--m_left == 0u) { m_e2 = err; m_phase = MP_POST; m_left = m_w; }
+        if (--m_left == 0u) { m_phase = MP_POST; m_left = m_w; }
         break;
       case MP_POST:
-        if (--m_left == 0u) { m_e3 = err; meas_finish(); }
+        fit_add(&m_f1, meas_resid);
+        if (--m_left == 0u) meas_finish(ev->utc_ns);
         break;
       default:
         st = CTRL_TRACK;

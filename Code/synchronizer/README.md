@@ -22,6 +22,23 @@ ninja -C build
 `build/synchronizer.uf2` is the image. The console is USB CDC at any baud
 rate; the UART pins stay free for a GPS receiver on J2.
 
+### Host tests
+
+The part of the firmware most likely to be quietly wrong is the arithmetic
+in `control.c`, and it is also the part hardest to check on the bench — a
+swinging pendulum takes minutes per measurement and never repeats exactly.
+So `test/` compiles `src/control.c` *unmodified* against stub headers and
+feeds it synthetic swings with a known answer:
+
+```sh
+make -C test check
+```
+
+It checks that `MEASURE` recovers the kick it was given, that the error bar
+it prints matches the spread it actually has, that it refuses to call noise
+a measurement, and that `PTIMESCAN` ranks placements by sign rather than by
+magnitude. Run it after touching the loop; it takes a second.
+
 ## What each piece does
 
 | File | Role |
@@ -200,14 +217,42 @@ about 11 s/day fast, from the audio measurement.
 already know:
 
 ```
-MEASURE 20 Y
+MEASURE 60 Y
 ```
 
-It fires one retard pulse per swing for 20 swings, subtracts the natural
-drift over that interval, and reports nanoseconds of phase per pulse. Start
-with a narrow `PW` and work up — an 18 cm pendulum stores very little
-energy, so the coil has more authority than you might expect, and it will
-disturb the swing amplitude as readily as the phase.
+It watches for 60 swings, fires one retard pulse per swing for 60 swings,
+watches for 60 more, and reports nanoseconds of phase per pulse — three
+times the pulse count in swings, and it prints the duration before it
+starts. Start with a narrow `PW` and work up: an 18 cm pendulum stores very
+little energy, so the coil has more authority than you might expect, and it
+will disturb the swing amplitude as readily as the phase.
+
+The measurement rides on the pendulum rate tracker, so the loop has to have
+been tracking for at least `RATEKP` swings — about five minutes — before it
+will run. Through the measurement the tracker stops learning and free-runs
+on the rate it had, which makes it a flywheel the pulses cannot move; what
+shows up against it is what the pulses did. Each window is fitted by least
+squares rather than read off its endpoints, which matters more than it
+sounds: per-swing timing noise is a couple of milliseconds and the thing
+being measured is tens of microseconds.
+
+So read the error bar it prints, not just the number:
+
+```
+retard authority over 60 pulses
+   event noise 2270 us; windows of 60 swings either side
+   rate before 12, after 340 ns per 1000 swings  (pulsing moved it 383 ppb)
+   phase across pulsing 5342 us, of which 1056 us was rate
+   kick 4286 us -> 71433 +/- 24900 ns per pulse
+   AUTH 0 71433   then SAVE to keep it
+```
+
+The uncertainty falls as the pulse count to the three-halves power, so if
+the answer is inside its own error bar the fix is simply `MEASURE 200 Y` and
+a longer wait. `rate before`/`after` is the other half of the story: a pulse
+that changes the swing *amplitude* changes the rate through circular error,
+and that shows up as the slope change rather than the step. The two are in
+quadrature — a placement with all kick and no rate change is the one to want.
 
 Advance and retard are measured separately, because they are not the same
 number. An attract-only coil retards when the bob is on its side of centre
@@ -216,11 +261,18 @@ weaker — depending on where the coil sits the two can differ by more than an
 order of magnitude. Run it both ways:
 
 ```
-MEASURE 20 N        advance
-MEASURE 20 Y        retard
+MEASURE 60 N        advance
+MEASURE 60 Y        retard
 AUTH <advance_ns> <retard_ns>
 SAVE
 ```
+
+If a direction comes back with the wrong sign the measurement says so and
+refuses to suggest an `AUTH` for it — the pulse is landing on the wrong side
+of the bob's turning point, and `PTIMESCAN` is the tool for finding where it
+should go. That sweep ranks placements by what they were *asked* to do, not
+by how large the number came out, and draws each one as a bar either side of
+a zero column so a sign flip is visible at a glance.
 
 Leaving one of them at zero is legitimate: the loop then corrects in one
 direction only, which is all a clock that consistently gains ever needs.
