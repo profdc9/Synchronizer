@@ -56,9 +56,31 @@ static char    *cap_buf;
 static uint32_t cap_sz, cap_len;
 static bool     cap_on, cap_trunc;
 
+/* Everything the console prints also lands in a ring, always, whether or
+   not a command asked for it.  The results that matter most - an authority
+   measurement finishing, a placement sweep's table, the swing echo - are
+   printed from the control loop long after the command that started them
+   returned, so the per-command capture never sees them.  That was fine
+   while a USB cable was attached.  It is not fine once the clock is back in
+   its own room and the only way in is wireless. */
+#define LOG_SIZE   4096u
+static char     log_buf[LOG_SIZE];
+static uint32_t log_head;          /* next write position                 */
+static uint32_t log_seq;           /* bytes ever written; the cursor      */
+
 static void cap_out_chars(const char *buf, int len)
 {
   int i;
+  {
+    int i;
+    for (i = 0; i < len; i++)
+    {
+      log_buf[log_head] = buf[i];
+      log_head = (log_head + 1u) % LOG_SIZE;
+      log_seq++;
+    }
+  }
+
   if (!cap_on || !cap_buf) return;
   for (i = 0; i < len; i++)
   {
@@ -870,6 +892,30 @@ static int help_cmd(int args, tinycl_parameter *tp, void *v)
   (void)args; (void)tp; (void)v;
   tinycl_print_commands(sizeof(tcmds) / sizeof(tinycl_command), tcmds);
   return 1;
+}
+
+uint32_t cli_log_seq(void) { return log_seq; }
+
+uint32_t cli_log_read(uint32_t from, char *out, uint32_t outsz, uint32_t *next)
+{
+  uint32_t avail, want, start, n = 0u;
+
+  *next = log_seq;
+  if (outsz == 0u) return 0u;
+  if (from > log_seq) from = log_seq;            /* a restarted device */
+
+  avail = log_seq - from;
+  if (avail > LOG_SIZE) avail = LOG_SIZE;        /* the rest has scrolled away */
+  want  = (avail < outsz - 1u) ? avail : (outsz - 1u);
+
+  start = (log_head + LOG_SIZE - want) % LOG_SIZE;
+  while (n < want)
+  {
+    out[n] = log_buf[(start + n) % LOG_SIZE];
+    n++;
+  }
+  out[n] = '\0';
+  return n;
 }
 
 bool cli_run_captured(const char *cmd, char *out, uint32_t outsz, uint32_t *outlen)

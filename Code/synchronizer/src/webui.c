@@ -359,6 +359,21 @@ void http_dispatch(const char *method, const char *path, const char *query,
     return;
   }
 
+  /* The console ring, from a cursor.  First line is the cursor to pass
+     back next time; everything after it is what has been printed since.
+     This is how a measurement's result reaches a browser at all - it is
+     printed from the control loop, long after the command returned. */
+  if (strcmp(path, "/api/log") == 0)
+  {
+    uint32_t from = (uint32_t)http_query_int(query, "from", 0);
+    uint32_t next = 0u, n, hdr;
+    hdr = (uint32_t)snprintf(scratch, scratch_len, "%lu\n",
+                             (unsigned long)cli_log_seq());
+    n = cli_log_read(from, scratch + hdr, scratch_len - hdr - 1u, &next);
+    reply(out, 200, "text/plain; charset=utf-8", scratch, hdr + n);
+    return;
+  }
+
   if (strcmp(path, "/api/cli") == 0)
   {
     if (!post)

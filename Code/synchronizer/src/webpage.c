@@ -254,7 +254,8 @@ const char web_page[] =
   "<script>\n"
   "var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;\n"
   "var hist=[],hpos=0,hdraft='';\n"
-  "var WEBVER='70ccd116';\n"
+  "var logcur=-1;\n"
+  "var WEBVER='e19b4178';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -302,6 +303,19 @@ const char web_page[] =
   " }).catch(function(e){cliwait=false;$('runbtn').disabled=false;\n"
   "  cliAdd(e.message)})}\n"
   "\n"
+  "/* Anything the device printed on its own - a measurement finishing, the\n"
+  "   swing echo - arrives here rather than as a command's reply. */\n"
+  "function pumpLog(){\n"
+  " fetch('/api/log\?from='+(logcur<0\?0:logcur)).then(function(r){return r.text()})\n"
+  "  .then(function(t){\n"
+  "   var nl=t.indexOf('\\n'); if(nl<0)return;\n"
+  "   var seq=parseInt(t.slice(0,nl),10), body=t.slice(nl+1);\n"
+  "   if(logcur<0){logcur=seq;return}        /* first poll: start from now */\n"
+  "   if(seq==logcur)return;\n"
+  "   logcur=seq;\n"
+  "   if(body)cliAdd(body.replace(/\\r/g,'').replace(/\\s+$/,''))})\n"
+  "  .catch(function(){})}\n"
+  "\n"
   "function cliDone(){\n"
   " fetch('/api/cli').then(function(r){return r.text()}).then(function(t){\n"
   "  cliAdd(t.replace(/\\r/g,'')||'(no output)');\n"
@@ -348,6 +362,7 @@ const char web_page[] =
   " if(cliseq<0)cliseq=d.cliseq;\n"
   " else if(d.cliseq!=cliseq){cliseq=d.cliseq;cliDone()}\n"
   " if(d.web&&d.web!=WEBVER)$('stale').style.display='block';\n"
+  " pumpLog();\n"
   "\n"
   " var L=d.loop,e=$('lstate');e.textContent=L.state;\n"
   " e.className='pill '+(L.state=='track'\?'on':L.state=='hold'\?'bad':'off');\n"
@@ -492,4 +507,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
-const char web_version[] = "70ccd116";
+const char web_version[] = "e19b4178";

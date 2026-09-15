@@ -50,6 +50,14 @@ void cli_poll(void);
    Returns false if the command was refused; *outlen is always set. */
 bool cli_run_captured(const char *cmd, char *out, uint32_t outsz, uint32_t *outlen);
 
+/* The console ring.  Everything printed goes in, including what the control
+   loop prints long after its command returned - which per-command capture
+   cannot see, and which is the only record of a measurement finishing.
+   Read from a cursor; `next` comes back as the cursor for the next call.
+   Ask from 0 for whatever is still held. */
+uint32_t cli_log_seq(void);
+uint32_t cli_log_read(uint32_t from, char *out, uint32_t outsz, uint32_t *next);
+
 #ifdef __cplusplus
 }
 #endif
