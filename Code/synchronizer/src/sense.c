@@ -349,8 +349,25 @@ static bool sample_cb(repeating_timer_t *rt)
 
   if (!in_event)
   {
+    /* Only let genuinely resting samples pull the baseline - not the ones
+       on the ramp approaching a dip.  Feeding the EMA unconditionally
+       biases it low every single cycle: as the bob approaches the coil,
+       dev climbs from ~0 toward thr, and every one of those pre-threshold
+       samples is still !in_event, so it used to be folded into the
+       "resting" average too.  On a wide, low-margin dip that bias is
+       enough to eventually drag the baseline down to where dev at the
+       true trough no longer reaches thr at all - and once that happens,
+       in_event never fires, so baseline never freezes either, and it
+       settles at the whole waveform's mean instead of the peak.  That is
+       self-sustaining: nothing breaks it but an external reacquire, which
+       is exactly the lockup found live - baseline still visibly moving
+       tick to tick, chatter and events both frozen.  Restricting updates
+       to samples comfortably away from thr, in either direction, excludes
+       the ramp that causes the drift while still tracking genuine level
+       shifts (it corrects a too-low baseline just as readily, since a
+       resting sample then reads as dev comfortably below zero). */
+    if (dev < thr / 4)
     {
-      /* Signed, or a sample below the baseline wraps and the filter blows up. */
       int32_t e = (((int32_t)s) << env_shift()) - baseline_q;
       baseline_q += e >> env_shift();
     }
@@ -405,15 +422,22 @@ static bool sample_cb(repeating_timer_t *rt)
     }
     else if ((now - rise_us) > win_max_event_us)
     {
-      /* Stuck high - abandon the event.  baseline_q is left alone rather
-         than reseeded from this sample: it is deep in an overlong dip
-         right now, and pinning the baseline there is exactly the lockup
-         described above the diagnostic pair.  The EMA in the !in_event
-         branch below resumes on its own next sample and finds its way
-         back given time - reseeding here bypasses that path instead of
-         speeding it up. */
+      /* Stuck high - abandon the event.  Originally this just cleared
+         in_event and trusted the !in_event branch to resume the EMA on
+         its own - which assumed there would BE a run of !in_event samples
+         to resume it.  There often isn't: dev is typically still above
+         thr at the exact instant an overlong event gets abandoned, so the
+         very next sample re-enters in_event immediately, and the detector
+         livelocks between "enter" and "abandon" with next to no time ever
+         spent in the branch that updates the baseline - ev_count and
+         chatter both frozen, ADC still sampling, nothing to show why.
+         A proper reacquire breaks that: it forces one full inter-event
+         interval where no new event can start at all (see the warmup gate
+         in !baseline_ready above), which is guaranteed to include the
+         true resting value regardless of how this one got stuck. */
       in_event     = false;
       fall_pending = false;
+      baseline_reacquire();
     }
   }
 
