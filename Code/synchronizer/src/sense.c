@@ -205,12 +205,24 @@ static uint16_t env_sample_ex(uint16_t *raw_mn, uint16_t *raw_mx)
 static uint16_t env_sample(void) { return env_sample_ex(NULL, NULL); }
 
 /* Every diagnostic that borrows the ADC goes through this pair.  While it
-   is borrowed the detector sees nothing, so three things have to happen:
-   the loop must be told rather than left to interpret the silence as a
-   phase excursion; the interval spanning the blind stretch must not reach
-   the rate statistics, or it reads as a wildly slow swing; and the
-   baseline must re-acquire, because a scan may well have left the drive
-   somewhere else entirely. */
+   is borrowed the detector sees nothing, so two things have to happen: the
+   loop must be told rather than left to interpret the silence as a phase
+   excursion, and the interval spanning the blind stretch must not reach
+   the rate statistics, or it reads as a wildly slow swing.
+
+   baseline_q is deliberately left alone.  It used to be zeroed here so it
+   would re-seed from the next sample - which sounds like "re-acquire", but
+   that next sample lands at whatever arbitrary phase the swing happens to
+   be at, and on a wide, deep dip that phase is often well down the slope
+   rather than at the resting value.  Because baseline_q only updates while
+   !in_event, a bad seed makes it chase the whole waveform's mean instead
+   of sitting at the peak - which shrinks the apparent excursion, which can
+   keep it from ever crossing THRESH again.  A self-sustaining lockup with
+   no way out, since escaping it needs exactly the detection it prevents.
+   The value baseline_q already held coming into the diagnostic was a
+   properly-settled reference; resuming the ordinary EMA from there is
+   strictly safer than reseeding blind, and still corrects itself over a
+   few time constants if the diagnostic left the drive somewhere new. */
 static control_state diag_was;
 
 static void sense_diag_begin(void)
@@ -227,7 +239,6 @@ static void sense_diag_end(void)
   last_event_us = 0u;      /* so the next event contributes no interval */
   prev_us       = time_us_64();
   prev_sample   = 0u;
-  baseline_q    = 0;       /* re-acquire; the drive may have moved */
 }
 
 const char *sense_diag_interrupted(void)
@@ -360,10 +371,15 @@ static bool sample_cb(repeating_timer_t *rt)
     }
     else if ((now - rise_us) > win_max_event_us)
     {
-      /* Stuck high - abandon the event and let the baseline re-acquire. */
+      /* Stuck high - abandon the event.  baseline_q is left alone rather
+         than reseeded from this sample: it is deep in an overlong dip
+         right now, and pinning the baseline there is exactly the lockup
+         described above the diagnostic pair.  The EMA in the !in_event
+         branch below resumes on its own next sample and finds its way
+         back given time - reseeding here bypasses that path instead of
+         speeding it up. */
       in_event     = false;
       fall_pending = false;
-      baseline_q   = ((int32_t)s) << env_shift();
     }
   }
 

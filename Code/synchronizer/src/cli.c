@@ -56,13 +56,20 @@ static char    *cap_buf;
 static uint32_t cap_sz, cap_len;
 static bool     cap_on, cap_trunc;
 
-/* Everything the console prints also lands in a ring, always, whether or
-   not a command asked for it.  The results that matter most - an authority
-   measurement finishing, a placement sweep's table, the swing echo - are
-   printed from the control loop long after the command that started them
-   returned, so the per-command capture never sees them.  That was fine
-   while a USB cable was attached.  It is not fine once the clock is back in
-   its own room and the only way in is wireless. */
+/* Everything the console prints ALSO lands in a ring, whether or not a
+   command asked for it - except what a captured command prints itself,
+   which would otherwise appear twice.  The results that matter most - an
+   authority measurement finishing, a placement sweep's table, the swing
+   echo - are printed from the control loop long after the command that
+   started them returned, so the per-command capture never sees them.
+   That was fine while a USB cable was attached.  It is not fine once the
+   clock is back in its own room and the only way in is wireless.
+
+   The web console relies on that split: a command's own reply arrives once,
+   via cap_buf and /api/cli; the ring (/api/log) is for everything else, so
+   it only ever shows what the device printed on its own.  Letting a
+   captured command's bytes into the ring too made its reply show up a
+   second time there, which is what this cap_on guard prevents. */
 #define LOG_SIZE   4096u
 static char     log_buf[LOG_SIZE];
 static uint32_t log_head;          /* next write position                 */
@@ -71,8 +78,9 @@ static uint32_t log_seq;           /* bytes ever written; the cursor      */
 static void cap_out_chars(const char *buf, int len)
 {
   int i;
+
+  if (!cap_on)
   {
-    int i;
     for (i = 0; i < len; i++)
     {
       log_buf[log_head] = buf[i];
