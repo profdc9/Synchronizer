@@ -33,10 +33,13 @@ extern "C" {
 /* GPIO_PULSE high turns Q4 on, which pulls the IRF9540N gate to ground and
    energises the drive coil from +12 V through R6 (10R).
 
-   R6 is the reason everything here is bounded.  The coil's DC resistance is
-   not known until it is measured; if it came out low, R6 would be asked to
-   dissipate several watts, and a pulse left on by a crashed or confused
-   controller would destroy it.  So:
+   R6 is the reason everything here is bounded.  The coil measured 48R, so
+   at 12V through the two in series that is ~0.21A - about 0.4W in R6 and
+   ~2.1W in the coil, comfortably within what either can shed even held on
+   continuously (drive_coil_test() proved as much: up to 5 whole seconds,
+   deliberately, once).  A pulse left on by a crashed or confused
+   controller is still worth guarding against regardless of how mild the
+   steady-state dissipation turned out to be, so:
 
      - the pin idles low and is driven low again by an alarm, not by code
        returning from a loop;
@@ -49,7 +52,7 @@ extern "C" {
    needs about 113 us of retard per swing, delivered as one short pulse every
    few dozen swings. */
 
-#define DRIVE_MAX_PULSE_US     50000u    /* absolute ceiling on one pulse  */
+#define DRIVE_MAX_PULSE_US     100000u   /* absolute ceiling on one pulse  */
 #define DRIVE_DUTY_PPM         20000u    /* 2% long-run average            */
 #define DRIVE_BUCKET_US        250000u   /* burst allowance                */
 

@@ -464,7 +464,7 @@ static int coiltest_cmd(int args, tinycl_parameter *tp, void *v)
 static int pw_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
-  cfg.pulse_us = (uint16_t)tp[0].ti.i;
+  cfg.pulse_us = (uint32_t)tp[0].ti.i;
   if (cfg.pulse_us > DRIVE_MAX_PULSE_US) cfg.pulse_us = DRIVE_MAX_PULSE_US;
   printf("pulse width %u us\r\n", cfg.pulse_us);
   return 1;

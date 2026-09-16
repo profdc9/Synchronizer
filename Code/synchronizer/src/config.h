@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  13u
+#define CONFIG_VERSION  14u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -133,7 +133,7 @@ typedef struct _synchronizer_config
   uint16_t tank_floor_adc;      /* envelope reading far off resonance    */
 
   /* --- drive ------------------------------------------------------ */
-  uint16_t pulse_us;            /* width of one correction pulse         */
+  uint32_t pulse_us;            /* width of one correction pulse         */
   uint16_t pulse_advance_us;    /* fire this long BEFORE expected arrival */
   uint16_t pulse_retard_us;     /* fire this long AFTER the bob leaves   */
   /* Advance and retard are NOT symmetric.  An attract-only coil retards

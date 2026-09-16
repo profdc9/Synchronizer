@@ -302,7 +302,7 @@ static bool apply_config(const char *q)
   if (set_u32(q, "tank",   &t, 100u, 500000u)) { sense_set_tank_hz(t);           touched = true; }
   if (set_u32(q, "thresh", &t, 1u, 4000u))     { cfg.detect_threshold = (uint16_t)t; touched = true; }
   if (set_u32(q, "falling",&t, 0u, 1u))        { cfg.detect_falling = (uint8_t)t;    touched = true; }
-  if (set_u32(q, "pw",     &t, 0u, DRIVE_MAX_PULSE_US)) { cfg.pulse_us = (uint16_t)t;      touched = true; }
+  if (set_u32(q, "pw",     &t, 0u, DRIVE_MAX_PULSE_US)) { cfg.pulse_us = t;                touched = true; }
   if (set_u32(q, "adv",    &t, 0u, 65535u))    { cfg.pulse_advance_us = (uint16_t)t; touched = true; }
   if (set_u32(q, "ret",    &t, 0u, 65535u))    { cfg.pulse_retard_us = (uint16_t)t;  touched = true; }
   if (set_u32(q, "kp",     &t, 1u, 1000000u))  { cfg.kp_swings = t;              touched = true; }
