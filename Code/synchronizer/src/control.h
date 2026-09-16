@@ -110,6 +110,14 @@ control_state control_blind(void);
    everything else, so a large offset slews rather than jumps. */
 void control_set_offset_ns(int64_t offset_ns);
 
+/* Zero the pending correction credit (and the PI integrator that feeds it).
+   Call whenever AUTH changes: the old backlog was priced under the old
+   authority - possibly no authority at all, in which case it should never
+   have been allowed to grow in the first place - and spending it under the
+   new price would dump however many pulses it takes to burn it off onto
+   the actuator all at once. */
+void control_clear_credit(void);
+
 /* Fire one pulse per event for n events and report the phase step, which
    is the loop gain.  Run this with the loop switched off. */
 bool control_measure_authority(uint32_t swings, bool retard);

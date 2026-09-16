@@ -309,6 +309,14 @@ void control_enable(bool on)
 
 void control_set_offset_ns(int64_t o) { target_off = o; }
 
+/* Called when AUTH changes.  A newly-set price makes the OLD credit mean
+   something different than when it was accumulated - and if credit was
+   sitting at zero because neither direction had a price yet, it is about
+   to start meaning something for the first time.  Either way the honest
+   thing is to start the spend fresh rather than dump whatever built up
+   under the old (or absent) authority onto the actuator in one burst. */
+void control_clear_credit(void) { credit_ns = 0; integ = 0; }
+
 const char *control_state_name(control_state s)
 {
   switch (s)
@@ -766,25 +774,37 @@ static void track_event(const sense_event *ev)
   /* --- spend the demand in whole pulses -------------------------------- */
   credit_ns += cmd_ns;
 
-  if (cfg.control_enabled)
+  /* Positive credit means the hands are ahead and want retarding.  Each
+     direction is spent at its own measured price; a direction that has
+     not been measured simply cannot be spent, which is what lets a
+     retard-only installation still discipline a clock that gains. */
   {
-    /* Positive credit means the hands are ahead and want retarding.  Each
-       direction is spent at its own measured price; a direction that has
-       not been measured simply cannot be spent, which is what lets a
-       retard-only installation still discipline a clock that gains. */
     int64_t ar = (int64_t)cfg.auth_retard_ns;
     int64_t aa = (int64_t)cfg.auth_advance_ns;
 
-    if (ar > 0 && credit_ns >= ar)       { fire_for(ev, true);  credit_ns -= ar; }
-    else if (aa > 0 && credit_ns <= -aa) { fire_for(ev, false); credit_ns += aa; }
+    if (cfg.control_enabled)
+    {
+      if (ar > 0 && credit_ns >= ar)       { fire_for(ev, true);  credit_ns -= ar; }
+      else if (aa > 0 && credit_ns <= -aa) { fire_for(ev, false); credit_ns += aa; }
+    }
 
-    /* Never let the credit run away if the actuator cannot or will not
-       deliver.  A direction that was never measured has no price of its own
-       to bound it by, so borrow the other one's - otherwise the retard-only
-       case, which is a supported configuration and the one a clock that
-       gains actually needs, accumulates unbounded advance demand it can
-       never spend, and then has to work off a phantom backlog before it
-       fires again when the error finally reverses. */
+    /* This clamp has to run whether or not control is enabled, and whether
+       or not a price is known yet, because credit_ns accumulates
+       unconditionally above.
+
+       With NEITHER direction measured, nothing can ever be spent - hold
+       the credit at zero rather than letting it run up an unpayable
+       backlog that gets dumped on the actuator in one burst the moment
+       AUTH finally gives it a price.
+
+       With one direction measured, borrow its price to bound the other -
+       otherwise the retard-only case, which is a supported configuration
+       and the one a clock that gains actually needs, accumulates
+       unbounded advance demand it can never spend, and then has to work
+       off a phantom backlog before it fires again when the error finally
+       reverses. */
+    if (ar <= 0 && aa <= 0) { credit_ns = 0; }
+    else
     {
       int64_t hi = (ar > 0) ? ar : aa;
       int64_t lo = (aa > 0) ? aa : ar;

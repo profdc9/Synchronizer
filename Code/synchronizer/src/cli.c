@@ -449,6 +449,7 @@ static int auth_cmd(int args, tinycl_parameter *tp, void *v)
   (void)args; (void)v;
   cfg.auth_advance_ns = (int32_t)tp[0].ti.i;
   cfg.auth_retard_ns  = (int32_t)tp[1].ti.i;
+  control_clear_credit();
   printf("authority: advance %ld ns, retard %ld ns per pulse\r\n",
          (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns);
   return 1;
