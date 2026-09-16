@@ -108,6 +108,25 @@ static uint64_t fall_at_us;      /* when it crossed, timed at thr itself    */
 static uint32_t chatter;         /* crossings that climbed back over thr    */
 static uint32_t rejected;        /* events the width gate threw out         */
 
+/* Reacquiring the baseline - cold boot, or the moment sampling resumes
+   after a diagnostic or an abandoned event - used to seed it from a single
+   instantaneous sample.  That sample lands at whatever phase of the swing
+   happened to be current, which on a wide dip is as likely to be mid-slope
+   as at rest; a bad seed then drags the EMA into chasing the whole
+   waveform's mean instead of sitting at the peak (see the long comment on
+   the diagnostic pair below).  This tracks the true extremum over one full
+   inter-event interval instead, so the seed is right regardless of when
+   reacquisition happened to start. */
+static bool     baseline_ready;
+static uint64_t warmup_deadline_us;
+static uint16_t warmup_extreme;
+
+static void baseline_reacquire(void)
+{
+  baseline_ready     = false;
+  warmup_deadline_us = 0u;    /* sample_cb sets the real deadline on its next tick */
+}
+
 /* interval history for sense_mean_interval_us */
 #define IVAL_RING 64
 static volatile uint32_t ivals[IVAL_RING];
@@ -210,22 +229,16 @@ static uint16_t env_sample(void) { return env_sample_ex(NULL, NULL); }
    excursion, and the interval spanning the blind stretch must not reach
    the rate statistics, or it reads as a wildly slow swing.
 
-   baseline_q is deliberately left alone.  It used to be zeroed here so it
-   would re-seed from the next sample - which sounds like "re-acquire", but
-   that next sample lands at whatever arbitrary phase the swing happens to
-   be at, and on a wide, deep dip that phase is often well down the slope
-   rather than at the resting value.  Because baseline_q only updates while
-   !in_event, a bad seed makes it chase the whole waveform's mean instead
-   of sitting at the peak - which shrinks the apparent excursion, which can
-   keep it from ever crossing THRESH again.  A self-sustaining lockup with
-   no way out, since escaping it needs exactly the detection it prevents.
-   The value baseline_q already held coming into the diagnostic was a
-   properly-settled reference; resuming the ordinary EMA from there is
-   strictly safer than reseeding blind, and still corrects itself over a
-   few time constants if the diagnostic left the drive somewhere new. */
+   Reacquiring the baseline is the third thing, and it goes through
+   baseline_reacquire() rather than being done here directly - a diagnostic
+   may well have left the drive somewhere new, so the old value cannot just
+   be trusted, but seeding straight from whatever sample happens to be
+   current is exactly the single-instant seed baseline_reacquire() exists
+   to avoid (see its comment above).  Warming up properly costs about one
+   inter-event interval of detection, same as it would at a cold boot. */
 static control_state diag_was;
 
-static void sense_diag_begin(void)
+void sense_diag_begin(void)
 {
   diag_was     = control_blind();
   adc_busy     = true;
@@ -233,12 +246,13 @@ static void sense_diag_begin(void)
   fall_pending = false;
 }
 
-static void sense_diag_end(void)
+void sense_diag_end(void)
 {
   adc_busy      = false;
   last_event_us = 0u;      /* so the next event contributes no interval */
   prev_us       = time_us_64();
   prev_sample   = 0u;
+  baseline_reacquire();
 }
 
 const char *sense_diag_interrupted(void)
@@ -306,7 +320,27 @@ static bool sample_cb(repeating_timer_t *rt)
   now = time_us_64();
   last_sample = s;
 
-  if (baseline_q == 0) baseline_q = ((int32_t)s) << env_shift();
+  if (!baseline_ready)
+  {
+    if (warmup_deadline_us == 0u)
+    {
+      uint64_t iv_us = cfg_event_interval_ns() / 1000ull;
+      if (iv_us < 1000ull) iv_us = 1000ull;
+      warmup_deadline_us = now + iv_us + iv_us / 5ull;   /* 1.2x one interval */
+      warmup_extreme = s;
+    }
+    else if (cfg.detect_falling ? (s > warmup_extreme) : (s < warmup_extreme))
+      warmup_extreme = s;
+
+    prev_sample = s;
+    prev_us     = now;
+    if ((int64_t)(warmup_deadline_us - now) > 0) return true;
+
+    baseline_q     = ((int32_t)warmup_extreme) << env_shift();
+    baseline_ready = true;
+    return true;      /* let detection begin cleanly on the next sample */
+  }
+
   base = baseline_q >> env_shift();
 
   /* Signed excursion in the direction the bob is expected to push it. */
@@ -403,7 +437,8 @@ void sense_init(void)
 
   ring_head = ring_tail = ev_count = overruns = 0;
   chatter = rejected = 0; fall_pending = false;
-  baseline_q = 0; in_event = false; last_event_us = 0;
+  in_event = false; last_event_us = 0;
+  baseline_reacquire();
   ival_n = ival_head = 0;
   prev_us = time_us_64(); prev_sample = 0;
   running = cfg.sense_enabled != 0;
@@ -505,7 +540,7 @@ void sense_sweep(uint32_t from_hz, uint32_t to_hz, uint32_t step_hz, uint32_t dw
          (unsigned long)worst_v, (unsigned long)worst_f);
 
   tank_apply(saved);
-  baseline_q = 0;
+  baseline_reacquire();
   running = was;
 }
 
@@ -711,8 +746,7 @@ void sense_capture(uint32_t rate_hz, uint32_t count)
   dma_channel_unclaim(chan);
 
   adc_set_clkdiv(0);
-  sense_diag_end();
-  baseline_q = 0;
+  sense_diag_end();      /* also reacquires the baseline */
 
   printf("captured %lu samples at %lu hz\r\n",
          (unsigned long)count, (unsigned long)(48000000.0f / div));
@@ -926,7 +960,7 @@ bool sense_find_resonance(uint32_t lo, uint32_t hi, bool plot, sense_resonance *
   else
     tank_apply(cfg.tank_hz);        /* put it back where it was */
 
-  baseline_q = 0;
+  baseline_reacquire();
   running    = was;
   last_res   = *out;
   return out->valid && !out->saturated;

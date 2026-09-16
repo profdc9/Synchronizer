@@ -433,6 +433,34 @@ static int coiloff_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+static int coiltest_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  uint32_t ms = (uint32_t)tp[0].ti.i;
+  (void)args; (void)v;
+
+  if (strcmp(tp[1].ts.str, "YES") != 0)
+  {
+    printf("refused - this holds the coil on for real seconds, not a pulse;\r\n"
+           "say YES to mean it: COILTEST ms YES\r\n");
+    return 1;
+  }
+  if (drive_coil_test_used())
+  {
+    printf("already used this boot - power-cycle the board to test again\r\n");
+    return 1;
+  }
+  if (ms > COIL_TEST_MAX_MS) ms = COIL_TEST_MAX_MS;
+  if (drive_coil_test(ms))
+  {
+    printf("coil driven for %lu ms - watch or feel for the pull now\r\n",
+           (unsigned long)ms);
+    note_diag_cost();
+  }
+  else
+    printf("refused\r\n");
+  return 1;
+}
+
 static int pw_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
@@ -909,6 +937,7 @@ static const tinycl_command tcmds[] =
   { "WATCH",    "y|n - echo every swing",              watch_cmd,    {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "PULSE",    "us - fire the coil once, now",           pulse_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "COILOFF",  "drop the coil and cancel pending",       coiloff_cmd,  {TINYCL_PARM_END} },
+  { "COILTEST", "ms YES - hold the coil on to feel it pull; once per boot", coiltest_cmd, {TINYCL_PARM_INT, TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "PW",       "us - correction pulse width",            pw_cmd,       {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "PTIME",    "advance_us retard_us - pulse placing",   ptime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "AUTH",     "advance_ns retard_ns - step one pulse buys", auth_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },

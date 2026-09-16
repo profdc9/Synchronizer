@@ -91,6 +91,20 @@ uint16_t sense_last_sample(void);
    back, rejected is events the width gate threw out. */
 /* After a diagnostic that borrowed the ADC: what it interrupted, or NULL. */
 const char *sense_diag_interrupted(void);
+
+/* The pair every diagnostic that disturbs the detector brackets its work
+   with - not only the ones that literally borrow the ADC.  A drive coil
+   pulsing right next to the sense coil for whole seconds (rather than a
+   normal, brief correction pulse) can couple enough into the envelope to
+   push the baseline off its resting value for the duration, so a coil test
+   uses this pair too even though it never touches the ADC channel itself:
+   sense_diag_begin() tells the control loop to hold rather than
+   misinterpret the gap, and freezes the detector rather than let it settle
+   onto whatever the disturbance looks like; sense_diag_end() lets it
+   resume cleanly, with the interval spanning the disturbance excluded from
+   the rate statistics. */
+void sense_diag_begin(void);
+void sense_diag_end(void);
 uint32_t sense_chatter_count(void);
 uint32_t sense_rejected_count(void);
 uint32_t sense_event_count(void);

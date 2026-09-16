@@ -68,6 +68,20 @@ bool drive_pulse_at(uint64_t when_us, uint32_t width_us);
 void drive_all_off(void);
 bool drive_is_on(void);
 
+/* "Does the magnet actually pull something in?" is a different question
+   from anything above - it wants the coil held ON for whole seconds, which
+   DRIVE_MAX_PULSE_US and the duty bucket exist specifically to prevent.
+   Rather than widen those for everyone, this gets its own, much narrower
+   door: a hard ceiling regardless of what is asked for, and it fires at
+   most once per boot - the latch never clears itself, only a power cycle
+   does, so running it again is a deliberate, visible act rather than a
+   repeated command.  The ordinary watchdog still applies; it is just told
+   about this pulse's real length instead of catching it at 55 ms. */
+#define COIL_TEST_MAX_MS       5000u     /* absolute ceiling, whatever is asked */
+
+bool drive_coil_test(uint32_t ms);       /* true if it actually fired */
+bool drive_coil_test_used(void);         /* already spent this boot?  */
+
 uint32_t drive_pulse_count(void);
 uint32_t drive_refused_count(void);
 uint32_t drive_budget_us(void);     /* what is left in the bucket */

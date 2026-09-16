@@ -246,7 +246,7 @@ const char web_page[] =
   "<option value=\"MEASURE 60 Y\"><option value=\"MEASURE 60 N\"><option value=\"MEASURE 200 Y\">\n"
   "<option value=\"PTIMESCAN Y 10000 60000 5 60\"><option value=\"PTIMESCAN N 10000 60000 5 60\">\n"
   "<option value=\"CONTROL Y\"><option value=\"CONTROL N\">\n"
-  "<option value=\"PULSE 2000\"><option value=\"COILOFF\"><option value=\"SAVE\">\n"
+  "<option value=\"PULSE 2000\"><option value=\"COILOFF\"><option value=\"COILTEST 3000 YES\"><option value=\"SAVE\">\n"
   "<option value=\"AUTH 0 4200000\"><option value=\"RATEKP 350\"><option value=\"FILTER 16 4 12\">\n"
   "<option value=\"HYST 30\"><option value=\"PTIME 20000 20000\">\n"
   "</datalist>\n"
@@ -258,7 +258,7 @@ const char web_page[] =
   "var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;\n"
   "var hist=[],hpos=0,hdraft='';\n"
   "var logcur=-1;\n"
-  "var WEBVER='1328766d';\n"
+  "var WEBVER='b877efb2';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -510,4 +510,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
-const char web_version[] = "1328766d";
+const char web_version[] = "b877efb2";
