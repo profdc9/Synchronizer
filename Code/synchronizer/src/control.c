@@ -382,6 +382,12 @@ static void meas_finish(uint64_t utc_ns)
 
   printf("%s authority over %lu pulses\r\n",
          meas_retard ? "retard" : "advance", (unsigned long)meas_fired);
+  if (meas_fired < m_n)
+    printf("   only %lu of %lu asked-for pulses actually fired - %lu were\r\n"
+           "   refused (PW too wide for the duty budget?); the count above\r\n"
+           "   and everything below already reflect what really happened\r\n",
+           (unsigned long)meas_fired, (unsigned long)m_n,
+           (unsigned long)(m_n - meas_fired));
   printf("   event noise %lld us; windows of %lu swings either side\r\n",
          (long long)(sig / 1000), (unsigned long)m_w);
   printf("   rate before %lld, after %lld ns per 1000 swings"
@@ -627,8 +633,19 @@ bool control_measure_authority(uint32_t n, bool retard)
    To advance, the coil has to pull the bob toward itself while the bob is
    on the FAR side, which is half a period from the drive coil's turning
    point - the sense coil's own extreme.  The bob is then accelerated toward
-   the drive coil and arrives sooner. */
-static void fire_for(const sense_event *ev, bool retard)
+   the drive coil and arrives sooner.
+
+   Returns whether the pulse was actually accepted.  drive_pulse_at() can
+   refuse - too wide, or the duty budget spent - and every caller used to
+   assume success: a MEASURE counted a refused pulse the same as a real one,
+   so its "per pulse" figure was silently divided by more pulses than were
+   ever delivered, and the credit-spending path deducted a price for a
+   correction that never happened.  Both bugs are invisible in STATUS
+   (fired/refused are counted, just never cross-checked against what a
+   caller assumed), and both look identical to ordinary measurement noise
+   from the outside - which is exactly what made them so easy to blame on
+   the statistics instead of the plumbing. */
+static bool fire_for(const sense_event *ev, bool retard)
 {
   uint64_t period_us = cfg_period_ns() / 1000ull;
   uint64_t offset_us = (period_us * (uint64_t)cfg.drive_offset_ppt) / 1000ull;
@@ -643,7 +660,7 @@ static void fire_for(const sense_event *ev, bool retard)
   /* Whatever that worked out to, it has to be far enough ahead to schedule. */
   while (when < ev->t_us + PULSE_LEAD_US) when += period_us;
 
-  drive_pulse_at(when, cfg.pulse_us);
+  return drive_pulse_at(when, cfg.pulse_us);
 }
 
 static void track_event(const sense_event *ev)
@@ -726,16 +743,25 @@ static void track_event(const sense_event *ev)
     switch (m_phase)
     {
       case MP_PRE:
-        fit_add(&m_f0, meas_resid);
+        /* ev->demod_ns, not meas_resid: a delay-and-multiply phase reading
+           off the sense coil's own continuously smoothed I/Q, independent
+           of the threshold crossings meas_resid is built from.  Measured
+           live against the same hardware, it carries about a ninth of the
+           per-event noise - see the demod comment in sense.c.  fit_slope/
+           fit_at still remove whatever constant rate this runs at relative
+           to nominal, same as always; only the noise on the level goes
+           down. */
+        fit_add(&m_f0, ev->demod_ns);
         if (--m_left == 0u) { m_phase = MP_PULSE; m_left = m_n; }
         break;
       case MP_PULSE:
-        fire_for(ev, meas_retard);
-        meas_fired++;
+        /* Only a pulse that actually fired belongs in the count the kick
+           gets divided by - see the comment on fire_for(). */
+        if (fire_for(ev, meas_retard)) meas_fired++;
         if (--m_left == 0u) { m_phase = MP_POST; m_left = m_w; }
         break;
       case MP_POST:
-        fit_add(&m_f1, meas_resid);
+        fit_add(&m_f1, ev->demod_ns);
         if (--m_left == 0u) meas_finish(ev->utc_ns);
         break;
       default:
@@ -784,8 +810,12 @@ static void track_event(const sense_event *ev)
 
     if (cfg.control_enabled)
     {
-      if (ar > 0 && credit_ns >= ar)       { fire_for(ev, true);  credit_ns -= ar; }
-      else if (aa > 0 && credit_ns <= -aa) { fire_for(ev, false); credit_ns += aa; }
+      /* Only spend the credit if the pulse actually fired - a refusal here
+         used to still deduct the price, so the loop believed it had paid
+         for a correction the pendulum never received and quietly fell
+         behind by however much that pulse was worth. */
+      if      (ar > 0 && credit_ns >= ar  && fire_for(ev, true))  credit_ns -= ar;
+      else if (aa > 0 && credit_ns <= -aa && fire_for(ev, false)) credit_ns += aa;
     }
 
     /* This clamp has to run whether or not control is enabled, and whether
@@ -853,11 +883,13 @@ void control_poll(void)
   while (sense_next_event(&ev))
   {
     if (ev_echo)
-      printf("ev %lu  t %llu us  peak %u  base %u  width %lu us  gap %lld us\r\n",
+      printf("ev %lu  t %llu us  peak %u  base %u  width %lu us  gap %lld us"
+             "  demod %ld ns\r\n",
              (unsigned long)ev.seq, (unsigned long long)ev.t_us,
              (unsigned)ev.peak, (unsigned)ev.baseline,
              (unsigned long)ev.width_us,
-             (long long)sense_mean_interval_us(1));
+             (long long)sense_mean_interval_us(1),
+             (long)ev.demod_ns);
 
     if (st == CTRL_IDLE) continue;
 

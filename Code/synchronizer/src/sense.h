@@ -55,6 +55,18 @@ typedef struct _sense_event
   uint16_t peak;        /* largest excursion from baseline, ADC counts  */
   uint16_t baseline;    /* baseline the event was measured against      */
   uint32_t width_us;    /* time between the two threshold crossings     */
+  /* Lock-in phase estimate, independent of the threshold crossings above.
+     A delay-and-multiply phase detector: an exponentially smoothed I/Q
+     mix against a synthetic reference at the nominal event rate (never
+     reset) is snapshotted at every edge crossing and multiplied against
+     the complex conjugate of the PREVIOUS snapshot; the resulting angle is
+     this event's phase step relative to a nominal interval, in
+     nanoseconds, with no absolute phase-zero reference to get wrong.
+     Diagnostic only for now - nothing consumes it yet - so t_us stays the
+     one true timestamp until this has been watched live against it.  0
+     until the smoothing filter has warmed up and one prior snapshot
+     exists (see baseline_reacquire()). */
+  int32_t  demod_ns;
 } sense_event;
 
 void sense_init(void);

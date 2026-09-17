@@ -54,6 +54,12 @@ int main(int argc, char **argv)
   double kick   = argc > 1 ? atof(argv[1]) : 89100.0;  /* ns per pulse   */
   double ramp   = argc > 2 ? atof(argv[2]) : 400.0;    /* ns/event after */
   double noise  = argc > 3 ? atof(argv[3]) : 2270000.0;
+  /* The delay-and-multiply demod MEASURE now actually consumes (see
+     control.c's MP_PRE/MP_POST) is a separate, far quieter per-event
+     signal than the threshold-crossing utc_ns - live on the development
+     board, about a ninth of the noise.  Same underlying truth (phase),
+     independently measured. */
+  double dnoise = noise / 9.0;
   int    pulses = argc > 4 ? atoi(argv[4]) : 60;
   if (argc > 5) seed = strtoull(argv[5], 0, 10);
   uint64_t nom;
@@ -99,7 +105,8 @@ int main(int argc, char **argv)
       sense_event e; uint32_t fb = stub_pulses; double d;
       memset(&e, 0, sizeof(e));
       t += nom; stub_now_us = t / 1000ull; e.t_us = stub_now_us;
-      e.utc_ns = t + (uint64_t)(int64_t)(phase + noise * gr());
+      e.utc_ns   = t + (uint64_t)(int64_t)(phase + noise * gr());
+      e.demod_ns = (int32_t)(phase + dnoise * gr());
       stub_push(&e); control_poll();
       if (stub_pulses != fb)
       { d = ((double)cfg.pulse_retard_us - 30000.0) / 30000.0;
@@ -126,7 +133,8 @@ int main(int argc, char **argv)
     /* the pulse fired on the PREVIOUS event lands in this interval */
     stub_now_us = t / 1000ull;
     e.t_us = stub_now_us;
-    e.utc_ns = t + (uint64_t)(int64_t)(phase + noise * gr());
+    e.utc_ns   = t + (uint64_t)(int64_t)(phase + noise * gr());
+    e.demod_ns = (int32_t)(phase + dnoise * gr());
     stub_push(&e); control_poll();
     if (stub_pulses != fired_before) { phase += kick; rate = ramp; }
     phase += rate;

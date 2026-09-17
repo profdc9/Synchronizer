@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include "pico/stdlib.h"
 #include "hardware/pwm.h"
 #include "hardware/adc.h"
@@ -81,6 +82,53 @@ static uint32_t win_rearm_us     = 300000u;
 static uint32_t win_min_event_us = 15000u;
 static uint32_t win_max_event_us = 500000u;
 
+/* --- lock-in phase, diagnostic only ------------------------------------
+
+   A delay-and-multiply phase detector, run alongside the threshold
+   crossings rather than in place of them.  I[n],Q[n] are an EXPONENTIALLY
+   smoothed mix of every sample against a synthetic cos/sin reference at
+   the nominal event rate - never reset, about DM_TAU_PERIODS periods of
+   memory - so each is a low-noise, continuously updated estimate of the
+   signal's current complex amplitude at the fundamental.
+
+   Two boxcar designs were tried before this and both had the same flaw:
+   reading an ABSOLUTE phase off atan2(Q,I) needs SOME fixed instant
+   defined as phase zero, and whatever that instant is costs either a
+   large, width-dependent constant offset (window-close) or reintroduces
+   threshold-crossing noise trying to correct for it (any width-based
+   de-rotation, even smoothed).
+
+   This sidesteps that by never reading an absolute phase at all.  At each
+   edge crossing, Z[n]=I[n]+jQ[n] is multiplied by the complex conjugate of
+   Z[n-m], the same pair captured m samples earlier at the PREVIOUS edge
+   crossing:
+     Id[n] = I[n]I[n-m] + Q[n]Q[n-m]
+     Qd[n] = I[n]Q[n-m] - Q[n]I[n-m]
+   atan2(Qd,Id) is the phase Z rotated through over those m samples, minus
+   whatever the reference itself rotated through - i.e. exactly the
+   residual phase step for that one interval, with no dependence on where
+   phase zero was ever defined, because that offset is identical in Z[n]
+   and Z[n-m] and cancels in the product.  m does not need to be an exact
+   period; it only needs the two ends to bracket the interval - here it is
+   however many ticks actually elapsed since the last edge crossing.
+
+   Summing these per-event steps reconstructs the total accumulated phase
+   between UTC and the pendulum the same way integrating a frequency
+   reconstructs a phase: each step's error is bounded by one interval's
+   worth of mismatch, not by a single fixed reference multiplied by however
+   long the whole measurement ran. */
+#define DM_K              (1.0f / 4096.0f)   /* ~4.8 periods of memory     */
+#define DM_WARMUP_SAMPLES (3u * 4096u)       /* ~3 time constants to settle */
+static uint32_t samp_hz_actual = SENSE_SAMPLE_HZ;
+static uint32_t dm_n;                /* nominal samples in one event interval */
+static float    dm_step;             /* reference phase advance per sample    */
+static float    dm_ns_per_rad;       /* nominal_interval_ns / (2*pi)          */
+static uint32_t dm_phase_i;          /* free-running reference phase, samples */
+static float    dm_I, dm_Q;          /* continuously smoothed, never reset    */
+static uint32_t dm_warm;             /* samples since (re)start, caps at warmup*/
+static float    dm_I_prev, dm_Q_prev;/* snapshot at the last edge crossing    */
+static bool     dm_prev_valid;
+
 static volatile sense_event ring[SENSE_RING];
 static volatile uint32_t    ring_head, ring_tail;
 static volatile uint32_t    ev_count, overruns;
@@ -125,6 +173,10 @@ static void baseline_reacquire(void)
 {
   baseline_ready     = false;
   warmup_deadline_us = 0u;    /* sample_cb sets the real deadline on its next tick */
+  dm_phase_i         = 0u;
+  dm_I = dm_Q        = 0.0f;
+  dm_warm            = 0u;    /* a gap means the smoothed I/Q must re-settle */
+  dm_prev_valid      = false;
 }
 
 /* interval history for sense_mean_interval_us */
@@ -149,6 +201,15 @@ void sense_refresh_timing(void)
   win_rearm_us     = r;
   win_min_event_us = mn;
   win_max_event_us = mx;
+
+  /* dm_n is samples per swing, not a sample-count timeout - see the demod
+     comment above.  A window is closed by the next real event regardless
+     of how this came out; it only sets the reference's phase step. */
+  dm_n = (uint32_t)(((uint64_t)iv_us * (uint64_t)samp_hz_actual + 500000ull)
+                    / 1000000ull);
+  if (dm_n < 4u) dm_n = 4u;
+  dm_step       = 6.28318530717958647692f / (float)dm_n;
+  dm_ns_per_rad = ((float)(iv_us * 1000ull)) / 6.28318530717958647692f;
 }
 
 uint32_t sense_rearm_us(void)     { return win_rearm_us; }
@@ -263,7 +324,8 @@ const char *sense_diag_interrupted(void)
        : NULL;
 }
 
-static void push_event(uint64_t t_us, uint16_t peak, uint16_t base, uint32_t width)
+static void push_event(uint64_t t_us, uint16_t peak, uint16_t base, uint32_t width,
+                       int32_t demod_ns)
 {
   uint32_t head = ring_head;
   uint32_t next = (head + 1u) % SENSE_RING;
@@ -276,6 +338,7 @@ static void push_event(uint64_t t_us, uint16_t peak, uint16_t base, uint32_t wid
   ring[head].peak     = peak;
   ring[head].baseline = base;
   ring[head].width_us = width;
+  ring[head].demod_ns = demod_ns;
   ring_head = next;
 
   if (last_event_us != 0)
@@ -347,6 +410,18 @@ static bool sample_cb(repeating_timer_t *rt)
   dev = cfg.detect_falling ? (base - (int32_t)s) : ((int32_t)s - base);
   thr = (int32_t)cfg.detect_threshold;
 
+  /* Exponentially smoothed I/Q, run every tick regardless of in_event and
+     NEVER reset except at baseline_reacquire() - read off (not reset) at
+     each edge crossing below. */
+  {
+    float ph = dm_step * (float)dm_phase_i;
+    dm_I += (cosf(ph) * (float)dev - dm_I) * DM_K;
+    dm_Q += (sinf(ph) * (float)dev - dm_Q) * DM_K;
+    dm_phase_i++;
+    if (dm_phase_i >= dm_n) dm_phase_i = 0u;
+    if (dm_warm < DM_WARMUP_SAMPLES) dm_warm++;
+  }
+
   if (!in_event)
   {
     /* Only let genuinely resting samples pull the baseline - not the ones
@@ -412,11 +487,24 @@ static bool sample_cb(repeating_timer_t *rt)
     if (fall_pending && dev < thr_lo)
     {
       uint32_t width = (uint32_t)(fall_at_us - rise_us);
+      int32_t  demod_ns = 0;
+
+      /* Delay-and-multiply: this event's smoothed I,Q against the snapshot
+         taken at the LAST edge crossing.  No absolute phase zero is ever
+         read, so there is nothing here to de-rotate for. */
+      if (dm_prev_valid && dm_warm >= DM_WARMUP_SAMPLES)
+      {
+        float Id = dm_I * dm_I_prev + dm_Q * dm_Q_prev;
+        float Qd = dm_I * dm_Q_prev - dm_Q * dm_I_prev;
+        float ph = atan2f(Qd, Id);
+        demod_ns = (int32_t)(ph * dm_ns_per_rad);
+      }
+      dm_I_prev = dm_I; dm_Q_prev = dm_Q; dm_prev_valid = true;
 
       in_event     = false;
       fall_pending = false;
       if (width >= win_min_event_us && width <= win_max_event_us)
-        push_event(rise_us + width / 2u, ev_peak, ev_baseline, width);
+        push_event(rise_us + width / 2u, ev_peak, ev_baseline, width, demod_ns);
       else
         rejected++;
     }
@@ -467,12 +555,12 @@ void sense_init(void)
   prev_us = time_us_64(); prev_sample = 0;
   running = cfg.sense_enabled != 0;
 
-  sense_refresh_timing();
-
   {
     uint32_t hz = cfg.sample_hz ? cfg.sample_hz : SENSE_SAMPLE_HZ;
     if (hz < 100u)   hz = 100u;
     if (hz > 20000u) hz = 20000u;
+    samp_hz_actual = hz;             /* sense_refresh_timing() needs this  */
+    sense_refresh_timing();
     add_repeating_timer_us(-(int64_t)(1000000u / hz), sample_cb, NULL, &samp_timer);
   }
 }
