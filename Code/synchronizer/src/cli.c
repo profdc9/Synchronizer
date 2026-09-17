@@ -224,9 +224,10 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
            (unsigned long long)((s / 3600ull) % 24ull),
            (unsigned long long)((s / 60ull) % 60ull),
            (unsigned long long)(s % 60ull));
-    printf("%-22s %ld ppb, %lu fixes, last offset %lld us\r\n", "timebase",
-           (long)tb_ppb(), (unsigned long)tb_fix_count(),
-           (long long)(tb_last_offset_ns() / 1000));
+    printf("%-22s %ld ppb, %lu fixes, last offset %lld us, kp %lu fixes\r\n",
+           "timebase", (long)tb_ppb(), (unsigned long)tb_fix_count(),
+           (long long)(tb_last_offset_ns() / 1000),
+           (unsigned long)(cfg.tb_kp_fixes ? cfg.tb_kp_fixes : 20u));
   }
   else
     printf("%-22s not set\r\n", "unix time");
@@ -700,6 +701,22 @@ static int ratekp_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+/* The timebase's own type-2 loop time constant, in accepted NTP fixes
+   rather than seconds - see the comment on tb_apply_fix().  Fixes are
+   noisy (network jitter); the crystal they measure only drifts with
+   temperature, so this wants raising rather than lowering if ppb ever
+   looks like it is chasing individual fixes instead of settling. */
+static int ntpkp_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  uint32_t n = (uint32_t)tp[0].ti.i;
+  (void)args; (void)v;
+  if (n < 2u)     n = 2u;
+  if (n > 2000u)  n = 2000u;
+  cfg.tb_kp_fixes = n;
+  printf("timebase kp %lu fixes\r\n", (unsigned long)n);
+  return 1;
+}
+
 static int slew_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
@@ -954,6 +971,7 @@ static const tinycl_command tcmds[] =
   { "GAINS",    "kp_swings ki_swings",                    gains_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "SLEW",     "ppm - cap on rate correction",           slew_cmd,     {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "RATEKP",   "events - rate tracker time constant",    ratekp_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "NTPKP",    "fixes - timebase rate loop time constant", ntpkp_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "WIFI",     "ssid password  (quote if spaces)",                          wifi_cmd,     {TINYCL_PARM_STR, TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "NTP",      "hostname",                               ntp_cmd,      {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "SYNC",     "ask for an NTP exchange now",            sync_cmd,     {TINYCL_PARM_END} },

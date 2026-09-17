@@ -665,7 +665,7 @@ static bool fire_for(const sense_event *ev, bool retard)
 
 static void track_event(const sense_event *ev)
 {
-  int64_t d, k, err, limit;
+  int64_t d, k, err;
 
   d = (int64_t)ev->utc_ns - (int64_t)exp_ns;
   {
@@ -771,34 +771,17 @@ static void track_event(const sense_event *ev)
     return;
   }
 
-  /* --- PI on phase ---------------------------------------------------- */
-  limit = ((int64_t)cfg.slew_limit_ppm * (int64_t)event_ns_nominal()) / 1000000ll;
-  if (limit < 0) limit = -limit;
-
-  {
-    int64_t kp = (int64_t)(cfg.kp_swings ? cfg.kp_swings : 4200u);
-    int64_t ki = (int64_t)(cfg.ki_swings ? cfg.ki_swings : 12600u);
-    int64_t p, i;
-
-    /* Feedforward first: we have measured what the pendulum is doing, so
-       command the standing correction rather than making the integrator
-       find it again.  Only used once the tracker has had time to settle -
-       before that it is still swinging toward the answer. */
-    int64_t ff = (rate_have && rate_n > 4u * (cfg.rate_kp_events ? cfg.rate_kp_events : 350u))
-                 ? -(rate_q / RATE_SCALE) : 0;
-    ff_last = ff;
-
-    integ += err;
-    p = -err / kp;
-    i = -integ / (ki * ki);
-    cmd_ns = ff + p + i;
-
-    if (cmd_ns > limit)  { cmd_ns = limit;  integ -= err; }   /* anti-windup */
-    if (cmd_ns < -limit) { cmd_ns = -limit; integ -= err; }
-  }
-
-  /* --- spend the demand in whole pulses -------------------------------- */
-  credit_ns += cmd_ns;
+  /* --- spend the phase error in whole pulses ---------------------------
+     credit_ns used to accumulate a PI-plus-feedforward loop's OUTPUT
+     (a gained, rate-compensated command built from err/rate_q).  It now
+     accumulates the phase error ITSELF, straight from ev->demod_ns - the
+     same low-noise, UTC-referenced reading MEASURE uses - and the
+     threshold-spend logic below is the only "controller" left: pure
+     accumulate-and-correct, no proportional term, no separate rate
+     estimate.  kp_swings/ki_swings/slew_limit_ppm are no longer read
+     anywhere; they are harmless to leave set, just without effect. */
+  cmd_ns = ev->demod_ns;      /* kept only so STATUS still shows a live number */
+  credit_ns += ev->demod_ns;
 
   /* Positive credit means the hands are ahead and want retarding.  Each
      direction is spent at its own measured price; a direction that has

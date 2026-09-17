@@ -116,12 +116,28 @@ static uint32_t win_max_event_us = 500000u;
    between UTC and the pendulum the same way integrating a frequency
    reconstructs a phase: each step's error is bounded by one interval's
    worth of mismatch, not by a single fixed reference multiplied by however
-   long the whole measurement ran. */
+   long the whole measurement ran.
+
+   The reference itself has to be UTC, not the raw local crystal - the
+   RP2040's crystal is only good to perhaps 30 ppm (see timebase.h), and
+   ADC ticks are driven by it directly, so dm_n raw ticks are a FIXED
+   physical duration regardless of what that duration is worth in true
+   UTC ns.  Left uncorrected, the reference would run at the crystal's own
+   error relative to UTC - harmless for any one swing (single-period
+   tolerance for a mismatch this size is enormous, see above) but a real,
+   compounding bias if these readings are ever summed over a long span.
+   tb_ppb() is the same live, NTP-learned correction timebase.c already
+   applies to turn local ticks into disciplined UTC; folding it into the
+   reference's phase step here keeps demod_ns tied to true UTC continuously,
+   the same way the main schedule already is, rather than needing whatever
+   summed it to periodically correct for a drift that should never have
+   been there. */
 #define DM_K              (1.0f / 4096.0f)   /* ~4.8 periods of memory     */
 #define DM_WARMUP_SAMPLES (3u * 4096u)       /* ~3 time constants to settle */
 static uint32_t samp_hz_actual = SENSE_SAMPLE_HZ;
 static uint32_t dm_n;                /* nominal samples in one event interval */
-static float    dm_step;             /* reference phase advance per sample    */
+static float    dm_step;             /* nominal reference phase advance/sample,
+                                         before the live tb_ppb() correction  */
 static float    dm_ns_per_rad;       /* nominal_interval_ns / (2*pi)          */
 static uint32_t dm_phase_i;          /* free-running reference phase, samples */
 static float    dm_I, dm_Q;          /* continuously smoothed, never reset    */
@@ -412,9 +428,15 @@ static bool sample_cb(repeating_timer_t *rt)
 
   /* Exponentially smoothed I/Q, run every tick regardless of in_event and
      NEVER reset except at baseline_reacquire() - read off (not reset) at
-     each edge crossing below. */
+     each edge crossing below.  The reference step is corrected to true
+     UTC by tb_ppb() every tick - see the demod comment above - but that
+     only ever moves at NTP-fix cadence (minutes), utterly static across
+     the handful of milliseconds one tick spans, so recomputing phase
+     fresh each time as step*count (rather than accumulating it) stays
+     exact within a cycle and self-consistent across the wrap. */
   {
-    float ph = dm_step * (float)dm_phase_i;
+    float dm_step_now = dm_step * (1.0f + (float)tb_ppb() * 1e-9f);
+    float ph = dm_step_now * (float)dm_phase_i;
     dm_I += (cosf(ph) * (float)dev - dm_I) * DM_K;
     dm_Q += (sinf(ph) * (float)dev - dm_Q) * DM_K;
     dm_phase_i++;

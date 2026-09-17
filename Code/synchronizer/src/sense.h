@@ -93,6 +93,16 @@ uint32_t sense_tank_hz(void);
 void sense_enable(bool on);
 bool sense_enabled(void);
 
+/* control.c's currently learned pendulum rate (parts per billion of
+   nominal), updated once per event.  The demod detector's synthetic
+   reference tracks this instead of raw nominal, so demod_ns becomes a
+   closed-loop residual against the SAME rate control.c has already
+   learned - the same role ev->utc_ns's rerr plays for the phase-pull
+   term - rather than an open-loop reading that never shrinks as the loop
+   converges.  ppb is small enough (parts per million at most) that this
+   never has to be more than a gentle nudge to the reference frequency. */
+void sense_set_rate_ppb(int32_t ppb);
+
 /* Pull the next event, oldest first.  False when the ring is empty. */
 bool sense_next_event(sense_event *out);
 

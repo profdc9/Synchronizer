@@ -194,8 +194,9 @@ void config_defaults(void)
   strncpy(cfg.ntp_host, "pool.ntp.org", CONFIG_HOST_LEN - 1);
   strncpy(cfg.ap_pass, "synchronizer", CONFIG_PASS_LEN - 1);
   strncpy(cfg.hostname, "synchronizer", CONFIG_NAME_LEN - 1);
-  cfg.tz_offset_s = 0;
-  cfg.xtal_ppb    = 0;
+  cfg.tz_offset_s  = 0;
+  cfg.tb_kp_fixes  = 20u;
+  cfg.xtal_ppb     = 0;
 }
 
 /* --- derived quantities ------------------------------------------------

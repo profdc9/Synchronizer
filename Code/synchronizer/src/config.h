@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  14u
+#define CONFIG_VERSION  15u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -212,6 +212,15 @@ typedef struct _synchronizer_config
      be a single DNS label: letters, digits and hyphens. */
   char     hostname[CONFIG_NAME_LEN];
   int32_t  tz_offset_s;         /* for display only; discipline is UTC   */
+
+  /* Type-2 loop time constant for the NTP-disciplined timebase, in FIXES
+     rather than seconds - fixes do not land on a uniform clock the way
+     pendulum swings do, but treating each accepted one as one "event" is
+     otherwise the same shape as control.c's rate_kp_events, and ki follows
+     it the same way (2*kp*kp).  Each individual fix's offset is noisy
+     (network jitter); the crystal it is measuring only drifts with
+     temperature, so there is nothing to lose by damping hard. */
+  uint32_t tb_kp_fixes;
 
   /* --- learned ---------------------------------------------------- */
   int32_t  xtal_ppb;            /* last known crystal error, seeds boot  */

@@ -22,6 +22,7 @@
 
 #include <stdlib.h>
 #include "pico/stdlib.h"
+#include "config.h"
 #include "timebase.h"
 
 /* Phase offsets larger than this are stepped rather than slewed - there is
@@ -32,8 +33,10 @@
    only known to about half the round trip. */
 #define MAX_RTT_US          400000u
 
-/* Rate estimation needs a decent baseline or the quotient is all noise. */
-#define MIN_RATE_INTERVAL_US 120000000ull   /* two minutes */
+/* A span shorter than this makes the rate term's normalization blow up
+   disproportionately for two fixes landing close together - skip the rate
+   update in that case; the phase pull below still applies regardless. */
+#define MIN_RATE_SPAN_US    1000000u         /* 1 s */
 
 #define PPB_LIMIT           150000          /* +/- 150 ppm, well past any xtal */
 
@@ -44,8 +47,6 @@ static bool     have_time;
 static uint32_t fixes;
 static int64_t  last_offset;
 static uint64_t last_fix_us;
-static uint64_t rate_ref_us;      /* anchor for the next rate estimate */
-static uint64_t rate_ref_utc_ns;
 
 void tb_init(int32_t seed_ppb)
 {
@@ -56,7 +57,6 @@ void tb_init(int32_t seed_ppb)
   fixes       = 0;
   last_offset = 0;
   last_fix_us = 0;
-  rate_ref_us = 0;
 }
 
 /* Project the model forward from its base to an arbitrary timer reading. */
@@ -83,9 +83,20 @@ int64_t tb_last_offset_ns(void) { return last_offset; }
 uint32_t tb_fix_count(void) { return fixes; }
 uint64_t tb_last_fix_us(void) { return last_fix_us; }
 
+/* A type-2 loop, the same shape as control.c's pendulum tracking NCO: one
+   error signal (offset - actual UTC from the server minus what the model
+   currently predicts for that instant), split into a proportional pull on
+   phase and an integral pull on rate.  kp is a time constant in FIXES
+   (cfg.tb_kp_fixes) rather than seconds, because fixes do not land on a
+   uniform clock; ki follows it the same critical-damping formula
+   (2*kp*kp).  Each fix's offset is noisy from network jitter, but the
+   crystal it measures only drifts with temperature, so a heavily damped
+   integral costs nothing real and buys a lot of noise rejection. */
 bool tb_apply_fix(uint64_t local_us, uint64_t server_utc_ns, uint32_t rtt_us)
 {
-  int64_t offset;
+  int64_t  offset;
+  uint64_t span_us;
+  int64_t  kp;
 
   if (rtt_us > MAX_RTT_US) return false;
 
@@ -97,12 +108,11 @@ bool tb_apply_fix(uint64_t local_us, uint64_t server_utc_ns, uint32_t rtt_us)
     fixes       = 1;
     last_offset = 0;
     last_fix_us = local_us;
-    rate_ref_us     = local_us;
-    rate_ref_utc_ns = server_utc_ns;
     return true;
   }
 
-  offset = (int64_t)server_utc_ns - (int64_t)project(local_us);
+  span_us = local_us - last_fix_us;
+  offset  = (int64_t)server_utc_ns - (int64_t)project(local_us);
   last_offset = offset;
   fixes++;
   last_fix_us = local_us;
@@ -110,38 +120,32 @@ bool tb_apply_fix(uint64_t local_us, uint64_t server_utc_ns, uint32_t rtt_us)
   if (offset > STEP_THRESHOLD_NS || offset < -STEP_THRESHOLD_NS)
   {
     /* Something jumped - a reboot of the server, a bad sample that slipped
-       the RTT gate, or our first fix after a long outage.  Step, and start
-       the rate estimate over rather than folding the jump into it. */
-    base_us         = local_us;
-    base_utc_ns     = server_utc_ns;
-    rate_ref_us     = local_us;
-    rate_ref_utc_ns = server_utc_ns;
+       the RTT gate, or our first fix after a long outage.  Step rather
+       than let a single huge outlier corrupt the rate loop. */
+    base_us     = local_us;
+    base_utc_ns = server_utc_ns;
     return true;
   }
 
-  /* Rate: over the interval since the last anchor, how much did our model
-     drift against the server?  That drift divided by the interval is the
-     residual frequency error, which we fold into ppb. */
-  if (rate_ref_us != 0 && (local_us - rate_ref_us) >= MIN_RATE_INTERVAL_US)
-  {
-    uint64_t span_us   = local_us - rate_ref_us;
-    int64_t  model_ns  = (int64_t)(project(local_us) - rate_ref_utc_ns);
-    int64_t  true_ns   = (int64_t)(server_utc_ns - rate_ref_utc_ns);
-    int64_t  err_ns    = true_ns - model_ns;      /* we were slow if > 0 */
-    int64_t  adj_ppb   = (err_ns * 1000) / (int64_t)(span_us);
+  kp = (int64_t)(cfg.tb_kp_fixes ? cfg.tb_kp_fixes : 20u);
 
-    /* Fold in a fraction of the estimate; a single NTP pair is noisy. */
-    ppb += (int32_t)(adj_ppb / 2);
+  /* Integral: fold a heavily damped fraction of the implied rate error
+     into ppb.  Skip it for an implausibly short span - two fixes landing
+     close together would otherwise blow the normalization up rather than
+     just being noisy like a normal one. */
+  if (span_us >= MIN_RATE_SPAN_US)
+  {
+    int64_t ki      = 2ll * kp * kp;
+    int64_t adj_ppb = (offset * 1000000ll) / ((int64_t)span_us * ki);
+    ppb += (int32_t)adj_ppb;
     if (ppb >  PPB_LIMIT) ppb =  PPB_LIMIT;
     if (ppb < -PPB_LIMIT) ppb = -PPB_LIMIT;
-
-    rate_ref_us     = local_us;
-    rate_ref_utc_ns = server_utc_ns;
   }
 
-  /* Re-base onto the corrected model, absorbing the residual phase offset
-     so the timebase is continuous and monotonic rather than jumping. */
-  base_utc_ns = project(local_us) + (uint64_t)(offset / 4);   /* slew 25% */
+  /* Proportional: pull the phase toward the server's offset, re-basing
+     onto the corrected model so the timebase stays continuous and
+     monotonic rather than jumping. */
+  base_utc_ns = project(local_us) + (uint64_t)(offset / kp);
   base_us     = local_us;
 
   return true;
