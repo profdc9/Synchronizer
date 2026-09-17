@@ -40,12 +40,21 @@
 #define NTP_MSG_LEN         48
 #define NTP_DELTA_1900_1970 2208988800ull
 
-/* Fast while the rate estimate is still being built, then back off.  The
-   timebase needs at least two minutes between fixes to say anything useful
-   about frequency, so there is no point hammering a public server. */
+/* Fast while the rate estimate is still being built, then back off.
+   timebase.c's loop is type-2 with time constant cfg.tb_kp_fixes fixes,
+   and settles in about 2*kp fixes without ringing - the same shape as
+   control.c's pendulum tracker, see its comment.  Polling slow (every
+   POLL_SLOW_S) from the start would make that take a fix count's worth
+   of POLL_SLOW_S each, which at kp=20 is over an hour before the loop
+   has even seen one time constant of data.  Every individual fix is
+   useful to a type-2 loop regardless of how close together they land
+   (unlike the old two-point endpoint-differenced estimator this
+   replaced, which needed >=2 minutes between fixes to say anything), so
+   there is nothing to lose by staying fast until it has actually
+   settled. */
 #define POLL_FAST_S         16u
 #define POLL_SLOW_S         256u
-#define FAST_FIXES          4u
+#define FAST_FIXES          (2u * (cfg.tb_kp_fixes ? cfg.tb_kp_fixes : 20u))
 
 #define CONNECT_TIMEOUT_MS  20000
 #define NTP_TIMEOUT_MS      4000
