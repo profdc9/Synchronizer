@@ -188,14 +188,23 @@ bool drive_coil_test(uint32_t ms)
   if (off_alarm > 0)  { cancel_alarm(off_alarm); off_alarm = -1; }
 
   coil_test_used = true;                   /* latched before the pin ever moves */
-  guard_ceiling_us = width_us;             /* the watchdog covers this pulse too */
 
   /* Several continuous seconds right next to the sense coil is exactly the
      disturbance sense_diag_begin()/end() exist to bracket, even though
      nothing here touches the ADC - the coupling, not ADC ownership, is
-     what the detector needs shielding from. */
+     what the detector needs shielding from.
+
+     This has to run BEFORE the wide guard_ceiling_us is set, not after:
+     sense_diag_begin() calls control_blind(), which - if the loop was
+     tracking - calls drive_all_off(), and drive_all_off() resets
+     guard_ceiling_us back to the ordinary DRIVE_MAX_PULSE_US.  Setting the
+     wide ceiling first just meant it got silently clobbered a few lines
+     later, before the pin ever turned on, and the watchdog cut the test at
+     ~105 ms instead of the requested duration every single time the loop
+     was running when COILTEST was called. */
   sense_diag_begin();
   coil_test_active = true;
+  guard_ceiling_us = width_us;             /* the watchdog covers this pulse too */
   coil_on();
   off_alarm = add_alarm_in_us(width_us, coil_test_off_cb, NULL, true);
   if (off_alarm < 0)                       /* never start what cannot be stopped */
