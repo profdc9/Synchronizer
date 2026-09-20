@@ -56,12 +56,14 @@ magnitude. Run it after touching the loop; it takes a second.
 ## Two things worth knowing before powering it up
 
 **The drive coil can cook R6.** `GPIO4` high energises the coil from +12 V
-through R6, a 10R resistor. Until the coil's DC resistance is measured, the
-current is unknown, and a stuck pulse could put several watts into that
-resistor. So the firmware bounds every pulse three independent ways: a
-ceiling of 50 ms on any single pulse, a separate 5 ms watchdog timer that
-forces the pin low regardless of what the rest of the code believes, and a
-token bucket that caps the long-run average duty at 2%. The pin is driven low
+through R6. Its value is still being tuned on the development board (it may
+end up as low as 0R), so check the current schematic rather than assuming a
+number here. Until the coil's DC resistance is measured, the current is
+unknown, and a stuck pulse could put several watts into that resistor. So the
+firmware bounds every pulse three independent ways: a ceiling of 100 ms on
+any single pulse, a separate watchdog checked every 5 ms that forces the pin
+low regardless of what the rest of the code believes, and a token bucket
+that caps the long-run average duty at 2%. The pin is driven low
 in `drive_init()` before anything else runs. Default pulse width is a timid
 2 ms — widen it once you know what the coil draws.
 
@@ -70,6 +72,50 @@ loop refuses to fire even when enabled until the pulse authority has been
 measured, and it can only act in a direction that has been measured. A fresh board will sit there sensing and telling you what it sees.
 
 ## Bring-up, in order
+
+**A firmware update can silently reset everything below.** The config sector
+carries a magic number and a version; if a build changes the struct layout,
+the device restores defaults on its next boot rather than reading a stale
+layout — deliberately, since the alternative is misinterpreting bytes that
+used to mean something else. That is the right call for tuning values, which
+are guesses anyway, but it means `THRESH`, `WINDOWS`, `PW`, `PTIME`, `AUTH`
+and everything else below can vanish after a routine reflash with no warning
+beyond `STATUS` quietly showing different numbers than you left it with. If a
+clock that was working stops acquiring or measuring right after an update,
+suspect this before suspecting the update's actual change — walk back through
+the steps below rather than assuming the new code broke something.
+
+**0. Pick the tank components.** The inductive sense works best somewhere in
+30-100 kHz. If you don't already know the sense coil's inductance, measure it
+directly with an LCR meter, or estimate one you're winding yourself from
+`L = mu_0 N^2 A / l` (turns squared, cross-sectional area, over coil length).
+Either way, solve for C3 to land on a target frequency f in that band:
+
+```
+C = 1 / (4 pi^2 f^2 L)
+```
+
+A typical C3 lands somewhere between 1000 pF and 10000 pF for coils in the
+few-mH range tuned into 30-100 kHz — worth a sanity check against the
+calculation before ordering parts; a result far outside that band usually
+means the wrong L or the wrong target frequency, not an unusual coil.
+
+C3 is not the only capacitance across the tank, though: C6 taps the tank to
+feed the amplifier — lightly enough that it does not load it down — but it
+still adds its own value in parallel with C3, currently 30 pF on the
+development board, so account for it (`C3 + C6`) when solving for a target
+frequency, not C3 alone.
+
+Pick the nearest standard capacitor value - an exact match is not needed,
+because the next step measures the tank's *actual* resonance rather than
+trusting the calculation. The development board's own sense coil is 2.5 mH on
+a square 25x25 mm form, for reference.
+
+**Use a film capacitor for C3, or a ceramic NP0/C0G type - not a typical
+X7R.** X7R's capacitance shifts substantially with temperature and applied
+voltage, which is exactly what a frequency-determining tank component cannot
+tolerate; the tank frequency will drift and the whole detector chain rides on
+that frequency staying put.
 
 **1. Calibrate the tank.** With the sense coil on J3 and **nothing metallic
 near it** — not the bob, not your hand, not a steel rule on the bench:
@@ -135,6 +181,29 @@ and reports how far the bob moves the envelope. **The peak-to-peak figure is
 the entire signal budget** — maximise it by moving the coil, re-running after
 each move. It leaves the drive on the winner.
 
+**The recommended default geometry is opposite extremes**, and it is worth
+starting there rather than exploring alternatives: sense coil at one extreme,
+drive coil at the other. Place each coil about a quarter of the bob's own
+diameter *beyond* where the bob's metal actually reaches at that extreme —
+not centred on the point of deepest penetration. At the true turning point
+the bob is nearly stationary, which is what produces a wide, poorly-localised
+dip; offsetting the coil means it only sees the bob while it is still moving,
+which gives a narrower, more sharply-timed crossing for the sense coil, and
+lets the drive coil work through its *lateral fringe field* rather than a
+direct, on-axis pull. "Bob diameter" here means the extent of the metal, not
+any outer decorative dimension — the development clock's bob is a steel core
+inside a brass envelope, so it is the full brass-covered diameter that
+matters, since eddy-current sensing responds to any conductor and the brass
+alone would still register even though it is not itself magnetic.
+
+The drive coil benefits in particular from a design that leans into the
+fringe field rather than fighting it: a commercial electromagnet meant for
+attaching to metal, with a steel bolt glued to its own centre core so the
+field extends past the coil's physical edge, measurably outperformed direct
+placement attempts on the development clock — an evening of no measurable
+authority at all became a clearly significant one purely from this change,
+nothing else. Start here rather than rediscovering it by trial and error.
+
 Geometry matters more than fine positioning. The bob's distance from a coil
 at the swing *extreme* varies by twice the amplitude; at the *centre of
 travel*, only by one amplitude. On the development clock that was 206 counts
@@ -179,6 +248,40 @@ so one swing in ten was abandoned as stuck-high. At 90 — 56% of peak — no
 misses and the lowest jitter. Too high is bad too: near the dip's floor the
 slope flattens again and normal amplitude variation starts causing misses.
 
+**If it stops acquiring entirely — not one swing in ten, every one of
+them — the loop can look dead while the signal underneath is perfectly
+healthy.** `STATUS` still shows `events` frozen at whatever it was, `chatter`
+climbing steadily, and `baseline`/`last sample` both clearly alive and
+moving. That combination — chatter increasing, `events` not — means events
+are opening and never closing: every single one is running past
+`max_event_pct` and getting abandoned as stuck-high before it can complete,
+so none of them ever reach the width gate to be counted, rejected, or even
+logged by `WATCH` (its echo only fires on events `sense.c` actually reports).
+This is the same failure as the table above, just at 100% instead of 10% —
+most often seen right after a reflash wiped `WINDOWS` back to its defaults
+while the coil geometry underneath had since changed enough that the old
+percentages no longer fit.
+
+Diagnose it with `TRACE`, not by guessing new `WINDOWS` numbers: it plots the
+raw envelope against time, bypassing the threshold/event state machine
+entirely, so it shows the true dip regardless of whether detection is
+currently working at all. Read the actual event width and gap straight off
+the printed trace — where the excursion crosses `THRESH` on the way in to
+where it recrosses `THRESH` minus `HYST` on the way out is the width; from
+that crossing to the next event's crossing is the gap — and set:
+
+```
+WINDOWS <rearm%> <min%> <max%>
+```
+
+so `max%` clears the real width with margin and `rearm%` sits comfortably
+*under* the real gap, not just under the nominal interval. A width that now
+runs 60-70% of the period rather than the ~30-40% the defaults assume is not
+a sign of a broken swing; it is what the recommended opposite-extremes-plus-
+offset geometry in step 2 produces once the coil is close enough to have real
+authority, and `WINDOWS` exists precisely so this is a one-line fix rather
+than a rebuild.
+
 `HYST` sets how far *below* the threshold the excursion must fall before the
 event is declared over. It costs nothing in timing — both edges are still
 timed at `THRESH` — and it stops ripple near the threshold from ending an
@@ -213,19 +316,81 @@ With both authorities still zero the loop tracks but never fires. Let it
 sit and watch `phase error` in `STATUS` walk at the clock's natural rate —
 about 11 s/day fast, from the audio measurement.
 
-**6. Measure the loop gain.** This is the one parameter the project does not
+**6. Find where the drive coil actually works.** `GEOMETRY events_per_swing
+drive_offset_ppt` sets how long after a sense event the bob reaches the drive
+coil, as parts per thousand of a full period - 500 for opposite extremes, the
+recommended default. Treat that as a starting guess, not a fact: get a rough
+number by timing the onboard LED (it blinks once per sense event) against the
+drive coil by eye or stopwatch, convert to ppt, and set it with `GEOMETRY`.
+
+Then let `PTIMESCAN` do the precise search. Both `pulse_advance_us` and
+`pulse_retard_us` are the *same* signed offset from that same centre - a
+given number means the same physical instant whether it is stored as the
+advance placement or the retard one - so either can reach a full half period
+in either direction, and a sweep across the *whole* range is a reasonable
+first move rather than a guess at a narrow window:
+
+```
+PTIMESCAN N -400000 400000 10 60
+```
+
+```
+advance placement sweep
+        us     ns/pulse       +/-  rate ppb   wrong <-- | --> working
+   -400000          -86      1441      2157   [               |               ]
+   -311112        -2850      1402      -658   [               |######         ]
+   -222223        -3015      1587      7010   [               |######         ]
+   -133334        -1801      1475      3161   [               |###            ]
+    -44445        -6335      1658      6157   [               |############## ]  <-- best
+     44444        -1018      1579      2405   [               |##             ]
+    133333         2046      1482     -1753   [           ####|               ]
+    222222         1187      1711     -3747   [             ##|               ]
+    311111         3884      1513        76   [       ########|               ]
+    400000         2189      1408     -3335   [           ####|               ]
+placement restored to 40000 us.
+'PTIME -44445 47500' then SAVE to keep the best
+```
+
+(This particular capture predates advance and retard being put on the same
+sign convention - at the time, advance subtracted from centre instead of
+adding, so the offsets shown here are negated relative to what today's
+firmware would report for the same physical instants; the best point above
+would be reached as `PTIME 44445 47500` now, not `-44445`. The method and the
+fluke warning below it are unaffected.)
+
+**Do not trust the single biggest number on its own.** A follow-up sweep
+across a narrower window around -44445, with more swings per point, found the
+true value there was closer to -2200 - consistent with its *neighbours* in
+the wide sweep, not with the outlier reading that made it look so much
+stronger. The wide sweep is for finding which *region* has real, working
+authority; treat any one point in it as noisy until a second, independent
+measurement near it agrees. `PW` also matters here: a short pulse may not
+give the coil's current time to build up before it switches off again, so if
+a region shows a real but weak effect, try lengthening `PW` before concluding
+the geometry itself is at fault.
+
+**Anything that physically disturbs the pendulum invalidates the rate
+tracker**, not just the count of swings it has seen — touching the coil,
+running `COILTEST`, adjusting the drive placement by hand. A disturbance
+leaves a contaminated `rate_q` that only washes out over roughly `2 * RATEKP`
+swings on its own; reissuing the same `RATEKP` value forces a clean restart
+instead of waiting it out, and is worth doing on reflex after any physical
+change, before trusting `MEASURE` or `PTIMESCAN` again.
+
+**7. Measure the loop gain.** This is the one parameter the project does not
 already know:
 
 ```
-MEASURE 60 Y
+MEASURE 60 N
 ```
 
-It watches for 60 swings, fires one retard pulse per swing for 60 swings,
-watches for 60 more, and reports nanoseconds of phase per pulse — three
-times the pulse count in swings, and it prints the duration before it
-starts. Start with a narrow `PW` and work up: an 18 cm pendulum stores very
-little energy, so the coil has more authority than you might expect, and it
-will disturb the swing amplitude as readily as the phase.
+It watches for 60 swings, fires one pulse per swing for 60 swings (`N` for
+advance, `Y` for retard), watches for 60 more, and reports nanoseconds of
+phase per pulse — three times the pulse count in swings, and it prints the
+duration before it starts. Start with a narrow `PW` and work up: a light
+pendulum stores very little energy, so the coil has more authority than you
+might expect, and it will disturb the swing amplitude as readily as the
+phase.
 
 The measurement rides on the pendulum rate tracker, so the loop has to have
 been tracking for at least `RATEKP` swings — about five minutes — before it
@@ -233,26 +398,82 @@ will run. Through the measurement the tracker stops learning and free-runs
 on the rate it had, which makes it a flywheel the pulses cannot move; what
 shows up against it is what the pulses did. Each window is fitted by least
 squares rather than read off its endpoints, which matters more than it
-sounds: per-swing timing noise is a couple of milliseconds and the thing
-being measured is tens of microseconds.
-
-So read the error bar it prints, not just the number:
+sounds: per-swing timing noise used to be a couple of milliseconds against a
+kick of tens of microseconds, which is why endpoint differencing was
+hopeless. The delay-and-multiply phase detector (`sense.c`) cut that noise by
+roughly 9x on the development clock, so read whatever `event noise` reports
+for your own hardware rather than assuming either number:
 
 ```
-retard authority over 60 pulses
-   event noise 2270 us; windows of 60 swings either side
-   rate before 12, after 340 ns per 1000 swings  (pulsing moved it 383 ppb)
-   phase across pulsing 5342 us, of which 1056 us was rate
-   kick 4286 us -> 71433 +/- 24900 ns per pulse
-   AUTH 0 71433   then SAVE to keep it
+advance authority over 60 pulses
+   event noise 151 us; windows of 60 swings either side
+   rate before 170586, after 5448473 ns per 1000 swings  (moved 6157 +/- 1860 ppb)
+   phase across pulsing -211 us, of which 168 us was rate
+   kick -380 us -> -6335 +/- 1658 ns per pulse
 ```
 
 The uncertainty falls as the pulse count to the three-halves power, so if
-the answer is inside its own error bar the fix is simply `MEASURE 200 Y` and
-a longer wait. `rate before`/`after` is the other half of the story: a pulse
-that changes the swing *amplitude* changes the rate through circular error,
-and that shows up as the slope change rather than the step. The two are in
-quadrature — a placement with all kick and no rate change is the one to want.
+the answer is inside its own error bar the fix is simply `MEASURE 200 N` and
+a longer wait — and see the fluke warning in step 6 before trusting a single
+run regardless of how significant it looks. `rate before`/`after` is the
+other half of the story: a pulse that changes the swing *amplitude* changes
+the rate through circular error, and that shows up as the slope change
+rather than the step. The two are in quadrature — a placement with all kick
+and no rate change is the one to want.
+
+**A second kind of fluke, and it will not go away with more swings.** A
+`PTIMESCAN` that comes back with a smooth, coherent placement-vs-kick curve —
+one sign across half the range, the other sign across the rest, exactly the
+shape a real coil authority curve should have — is not on its own evidence
+that the coil is doing anything. Run the same sweep with the magnet moved
+away from the clock entirely. If a similar curve still comes back, none of it
+is mechanical.
+
+**A blanking "fix" for this was tried and made things worse, not better —
+worth recording so it is not reinvented.** The suspicion was that firing the
+drive coil disturbs `sense.c`'s demod directly (supply sag, ground bounce, or
+coupling straight into the tank coil), and since that demod is a delay-and-
+multiply phase detector built on an I/Q accumulator that runs every ADC tick
+and is never reset, a glitch on even a few samples would show up as a step
+that decays only over the accumulator's own multi-swing time constant —
+indistinguishable from a genuine kick. The fix tried was a guard window
+(`SENSEDEAD <us>`) that stopped feeding samples into the accumulator for that
+long on either side of every pulse.
+
+It backfired. Measuring the same sweep at three guard widths —
+
+```
+SENSEDEAD 30000    ->  best-magnitude points around +-25000 ns/pulse
+SENSEDEAD 10000    ->  the same shape, roughly a third the size
+SENSEDEAD 0        ->  every point within about 1 sigma of zero, no shape at all
+```
+
+— showed the "fix" was the dominant source of the curve, scaling with the
+guard width rather than shrinking it. The reason is structural, not specific
+to this hardware: `dm_I`/`dm_Q` is a single-bin correlator estimating the
+Fourier coefficient of the envelope at one cycle per swing, and removing a
+fixed window from that correlation sum every cycle does not just lower its
+gain — the product of two sinusoids splits into a DC term and a second-
+harmonic term, and the second-harmonic part integrated over just the missing
+window does not cancel. Its phase depends on *where* the window sits, not on
+the true phase being measured, so blanking manufactures a bias that tracks
+pulse placement directly — worse for a sharp, non-sinusoidal dip (real
+harmonic content to feed the bias) than for a clean sinusoid, and worse the
+wider the guard window. `SENSEDEAD` was removed rather than defaulted to 0
+and left in the config, since a knob whose only well-tested setting is "off"
+is a trap for the next person tuning this board.
+
+With no blanking, the magnet-away curve does not clearly survive above noise
+either — every point of that same sweep landed within about one sigma of
+zero. So whatever the original electrical effect is, if it exists at all it
+is smaller than this measurement can currently resolve, and it is very
+unlikely to matter next to a much bigger problem: an attract-only
+coil at a fringe-field placement measured *microseconds* of authority per
+pulse against a clock that needs *~100 microseconds per swing* to correct —
+over an order of magnitude short regardless of how cleanly it is measured.
+Chasing this artifact further is a low priority until that gap is closed by
+some combination of a much wider `PW`, closer or more direct coupling, or
+more drive current.
 
 Advance and retard are measured separately, because they are not the same
 number. An attract-only coil retards when the bob is on its side of centre
@@ -277,13 +498,13 @@ a zero column so a sign flip is visible at a glance.
 Leaving one of them at zero is legitimate: the loop then corrects in one
 direction only, which is all a clock that consistently gains ever needs.
 
-**7. Close the loop.** With authority measured, the loop starts spending its
+**8. Close the loop.** With authority measured, the loop starts spending its
 demand in whole pulses. `STATUS` shows `undelivered credit` — the correction
 asked for but not yet paid out — and `pulses` counting up. At 11 s/day it
 needs 113 µs of retard per swing, so expect one pulse every few dozen swings,
 not one per swing.
 
-**8. Set the hands.** `OFFSET 30000` tells the loop that "on time" is 30 s
+**9. Set the hands.** `OFFSET 30000` tells the loop that "on time" is 30 s
 later than it currently thinks, and it will walk the hands there at the
 `SLEW` rate rather than jumping. Nobody touches the clock.
 
