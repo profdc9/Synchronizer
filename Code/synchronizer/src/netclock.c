@@ -74,6 +74,7 @@ static bool         dns_pending;
 static uint64_t     send_us;
 static bool         waiting;
 static uint32_t     ok_count, fail_count, last_rtt;
+static bool         ppb_saved;      /* learned crystal ppb written this boot? */
 static absolute_time_t next_poll, wait_deadline, retry_at;
 static absolute_time_t ap_retry_at;
 static uint32_t        ap_http_mark;
@@ -564,6 +565,27 @@ void net_poll(void)
   if (state == NET_FAILED) return;
 
   pending_run();
+
+  /* Once the rate loop has had its full settling time (see FAST_FIXES),
+     write what it learned back as next boot's seed - config.h's xtal_ppb,
+     fed to tb_init() - so a power cycle starts close to right instead of
+     re-discovering the crystal's error from scratch every time.  Once per
+     boot only, both because flash writes are not free and because the
+     crystal is not going to have changed meaningfully in the time this
+     took anyway.  Skipped if the learned value barely moved from what is
+     already stored, so a string of ordinary reboots with a stable crystal
+     does not wear the sector down for no reason. */
+  if (!ppb_saved && tb_fix_count() >= FAST_FIXES)
+  {
+    int32_t learned = tb_ppb();
+    int32_t delta   = learned - cfg.xtal_ppb;
+    ppb_saved = true;
+    if (delta > 100 || delta < -100)
+    {
+      cfg.xtal_ppb = learned;
+      config_save();
+    }
+  }
 
   if (ap_up)
   {
