@@ -174,11 +174,11 @@ static uint32_t json_status(char *b, uint32_t n)
     cfg.acquire_events, cfg.acquire_tol_pct);
 
   u += (uint32_t)snprintf(b + u, n - u,
-    "\"drive\":{\"on\":%d,\"pw\":%u,\"adv\":%u,\"ret\":%u,"
+    "\"drive\":{\"on\":%d,\"pw\":%u,\"adv\":%ld,\"ret\":%ld,"
       "\"authadv\":%ld,\"authret\":%ld,"
       "\"pulses\":%lu,\"refused\":%lu,\"budget\":%lu},",
-    drive_is_on() ? 1 : 0, cfg.pulse_us, cfg.pulse_advance_us,
-    cfg.pulse_retard_us, (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns,
+    drive_is_on() ? 1 : 0, cfg.pulse_us, (long)cfg.pulse_advance_us,
+    (long)cfg.pulse_retard_us, (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns,
     (unsigned long)drive_pulse_count(), (unsigned long)drive_refused_count(),
     (unsigned long)drive_budget_us());
 
@@ -285,10 +285,28 @@ static bool set_u32(const char *q, const char *k, uint32_t *dst, uint32_t lo, ui
   return true;
 }
 
+static bool set_i32(const char *q, const char *k, int32_t *dst, int32_t lo, int32_t hi)
+{
+  char v[24];
+  long x;
+  if (!http_query_get(q, k, v, sizeof(v))) return false;
+  x = strtol(v, NULL, 10);
+  if (x < (long)lo) x = (long)lo;
+  if (x > (long)hi) x = (long)hi;
+  *dst = (int32_t)x;
+  return true;
+}
+
 static bool apply_config(const char *q)
 {
   uint32_t t;
+  int32_t  ti, half;
   bool touched = false, reclock = false;
+
+  /* adv/ret can each reach a full half period from centre in either
+     direction now - see the pulse_advance_us/pulse_retard_us comment in
+     config.h - so the bound here scales with this clock's period. */
+  half = (int32_t)(cfg_period_ns() / 1000ull / 2ull);
 
   if (set_u32(q, "bph",    &t, 60u, 200000u))  { cfg.beats_per_hour = t;        touched = reclock = true; }
   if (set_u32(q, "bps",    &t, 1u, 8u))        { cfg.beats_per_period = (uint8_t)t;  touched = reclock = true; }
@@ -303,8 +321,8 @@ static bool apply_config(const char *q)
   if (set_u32(q, "thresh", &t, 1u, 4000u))     { cfg.detect_threshold = (uint16_t)t; touched = true; }
   if (set_u32(q, "falling",&t, 0u, 1u))        { cfg.detect_falling = (uint8_t)t;    touched = true; }
   if (set_u32(q, "pw",     &t, 0u, DRIVE_MAX_PULSE_US)) { cfg.pulse_us = t;                touched = true; }
-  if (set_u32(q, "adv",    &t, 0u, 65535u))    { cfg.pulse_advance_us = (uint16_t)t; touched = true; }
-  if (set_u32(q, "ret",    &t, 0u, 65535u))    { cfg.pulse_retard_us = (uint16_t)t;  touched = true; }
+  if (set_i32(q, "adv",    &ti, -half, half))  { cfg.pulse_advance_us = ti; touched = true; }
+  if (set_i32(q, "ret",    &ti, -half, half))  { cfg.pulse_retard_us  = ti; touched = true; }
   if (set_u32(q, "kp",     &t, 1u, 1000000u))  { cfg.kp_swings = t;              touched = true; }
   if (set_u32(q, "ki",     &t, 1u, 1000000u))  { cfg.ki_swings = t;              touched = true; }
   if (set_u32(q, "slew",   &t, 1u, 100000u))   { cfg.slew_limit_ppm = (int32_t)t;    touched = true; }

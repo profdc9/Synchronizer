@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  15u
+#define CONFIG_VERSION  18u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -134,13 +134,33 @@ typedef struct _synchronizer_config
 
   /* --- drive ------------------------------------------------------ */
   uint32_t pulse_us;            /* width of one correction pulse         */
-  uint16_t pulse_advance_us;    /* fire this long BEFORE expected arrival */
-  uint16_t pulse_retard_us;     /* fire this long AFTER the bob leaves   */
-  /* Advance and retard are NOT symmetric.  An attract-only coil retards
-     when the bob is on its side of centre and advances when the bob is at
-     the far extreme, where the field is much weaker - the two can differ
-     by an order of magnitude.  One number for both would make the loop
-     believe it had paid for a correction it never delivered. */
+  /* Both placements are offsets from the SAME centre - drive_offset_ppt's
+     instant, halfway between sense events for this clock's opposite-
+     extreme coils - not two independently-anchored windows.  Signed and
+     wide (int32_t, not the old uint16_t) so either can reach anywhere
+     within a full half-period of that centre in either direction: fixed
+     at +-65535 us, the two used to be structurally unable to reach a
+     ~300 ms band between them regardless of what was asked for, and a
+     magnet moved from where the geometry was last measured can easily
+     need more range than that to find again.
+       retard:  when = centre + pulse_retard_us
+       advance: when = centre + pulse_advance_us
+     Same formula for both - a given number means the same physical instant
+     whether it is stored as the retard placement or the advance one.  A
+     scan run under one label tells you exactly where to look under the
+     other, with no sign to flip to compare them; the two fields stay
+     independent only because the loop must remember a price and a
+     placement for each direction separately, not because the arithmetic
+     differs between them.
+
+     Advance and retard are NOT symmetric in what they're worth, though -
+     an attract-only coil retards when the bob is on its side of centre
+     and advances when the bob is at the far extreme, where the field is
+     much weaker - the two can differ by an order of magnitude.  One
+     number for both would make the loop believe it had paid for a
+     correction it never delivered. */
+  int32_t  pulse_advance_us;
+  int32_t  pulse_retard_us;
   int32_t  auth_advance_ns;     /* measured phase step of an advance pulse */
   int32_t  auth_retard_ns;      /* measured phase step of a retard pulse   */
 

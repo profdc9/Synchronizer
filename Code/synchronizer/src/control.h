@@ -128,8 +128,12 @@ bool control_measure_authority(uint32_t swings, bool retard);
    and none of it is along the travel - so authority peaks some way either
    side and 40 ms is only a guess.  This runs MEASURE at each of `steps`
    placements between lo_us and hi_us, settling in between, and prints a
-   table.  The original placement is restored at the end. */
-bool control_ptime_scan(bool retard, uint32_t lo_us, uint32_t hi_us,
+   table.  The original placement is restored at the end.
+
+   lo_us/hi_us are signed and can range across a full half period in
+   either direction now - see the pulse_advance_us/pulse_retard_us comment
+   in config.h - so lo_us may be negative. */
+bool control_ptime_scan(bool retard, int32_t lo_us, int32_t hi_us,
                         uint32_t steps, uint32_t swings);
 
 const char *control_state_name(control_state s);

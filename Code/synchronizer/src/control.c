@@ -37,8 +37,20 @@
 /* A pulse has to be scheduled far enough ahead that the event has finished
    being processed.  The sense event is timestamped at the midpoint of a dip
    that can be a third of a period wide, so it is already old when it
-   arrives. */
-#define PULSE_LEAD_US       20000ull
+   arrives.
+
+   This is a FLOOR, not typical slack: fire_for()'s wrap-forward loop stops
+   at the first period boundary that clears it, so a placement whose
+   centre-relative offset happens to land just above the floor gets almost
+   none of this margin, while a neighbour ten thousand microseconds away
+   can get a whole extra period of it for free just because it fell on the
+   other side of the boundary.  A 20 ms floor and a stalled USB-CDC
+   printf() (event echo, easily tens of ms if the host is slow to drain
+   it) are enough to lose that thin sliver outright - reproducibly, since
+   it is the same placement landing on the same side of the same
+   boundary every time, not ordinary jitter.  Widened so an ordinary
+   stall still leaves room. */
+#define PULSE_LEAD_US       50000ull
 
 static control_state st = CTRL_IDLE;
 
@@ -241,14 +253,15 @@ static int64_t meas_rate_sd_ppb(int64_t sigma, uint32_t w, int64_t nom)
 #define PTS_MAX      10u
 static bool     pts_on;
 static bool     pts_retard;
-static uint32_t pts_lo, pts_hi, pts_steps, pts_i, pts_swings;
+static int32_t  pts_lo, pts_hi;
+static uint32_t pts_steps, pts_i, pts_swings;
 static uint32_t pts_settle;        /* swings still to wait before the next */
-static uint32_t pts_us[PTS_MAX];
+static int32_t  pts_us[PTS_MAX];
 static int64_t  pts_ns[PTS_MAX];   /* kick, signed, ns per pulse           */
 static int64_t  pts_sd[PTS_MAX];   /* and its one sigma                    */
 static int64_t  pts_ppb[PTS_MAX];  /* what the pulsing did to the RATE     */
 static int64_t  pts_ppbsd[PTS_MAX];
-static uint16_t pts_restore;
+static int32_t  pts_restore;
 
 static bool ev_echo;
 
@@ -384,8 +397,10 @@ static void meas_finish(uint64_t utc_ns)
          meas_retard ? "retard" : "advance", (unsigned long)meas_fired);
   if (meas_fired < m_n)
     printf("   only %lu of %lu asked-for pulses actually fired - %lu were\r\n"
-           "   refused (PW too wide for the duty budget?); the count above\r\n"
-           "   and everything below already reflect what really happened\r\n",
+           "   refused (PW too wide for the duty budget, or this placement too\r\n"
+           "   close to the event to still be in the future once it is\r\n"
+           "   reported - see fire_for()); the count above and everything\r\n"
+           "   below already reflect what really happened\r\n",
            (unsigned long)meas_fired, (unsigned long)m_n,
            (unsigned long)(m_n - meas_fired));
   printf("   event noise %lld us; windows of %lu swings either side\r\n",
@@ -425,26 +440,26 @@ static void meas_finish(uint64_t utc_ns)
            (long long)(meas_retard ? mag : cfg.auth_retard_ns));
 }
 
-static uint32_t pts_place(uint32_t i)
+static int32_t pts_place(uint32_t i)
 {
   return (pts_steps < 2u) ? pts_lo
-       : pts_lo + ((pts_hi - pts_lo) * i) / (pts_steps - 1u);
+       : pts_lo + (int32_t)(((int64_t)(pts_hi - pts_lo) * (int64_t)i) / (int64_t)(pts_steps - 1u));
 }
 
 static void pts_start_point(void)
 {
-  uint32_t us = pts_place(pts_i);
-  if (pts_retard) cfg.pulse_retard_us  = (uint16_t)us;
-  else            cfg.pulse_advance_us = (uint16_t)us;
-  printf("  %lu of %lu: placement %lu us\r\n",
+  int32_t us = pts_place(pts_i);
+  if (pts_retard) cfg.pulse_retard_us  = us;
+  else            cfg.pulse_advance_us = us;
+  printf("  %lu of %lu: placement %ld us\r\n",
          (unsigned long)(pts_i + 1u), (unsigned long)pts_steps,
-         (unsigned long)us);
+         (long)us);
   if (!control_measure_authority(pts_swings, pts_retard))
   {
     pts_on = false;
     if (pts_retard) cfg.pulse_retard_us  = pts_restore;
     else            cfg.pulse_advance_us = pts_restore;
-    printf("sweep abandoned; placement restored to %u us\r\n", pts_restore);
+    printf("sweep abandoned; placement restored to %ld us\r\n", (long)pts_restore);
   }
 }
 
@@ -491,13 +506,13 @@ static void pts_finish(void)
     if (len > 14u) len = 14u;
     for (k = 1u; k <= len; k++) bar[15 + (g < 0 ? -(int)k : (int)k)] = '#';
 
-    printf("%10lu %12lld %9lld %9lld   [%s]%s\r\n",
-           (unsigned long)pts_us[i], (long long)pts_ns[i],
+    printf("%10ld %12lld %9lld %9lld   [%s]%s\r\n",
+           (long)pts_us[i], (long long)pts_ns[i],
            (long long)pts_sd[i], (long long)pts_ppb[i], bar,
            (i == best && bestgood > 0) ? "  <-- best" : "");
   }
 
-  printf("placement restored to %u us.\r\n", pts_restore);
+  printf("placement restored to %ld us.\r\n", (long)pts_restore);
 
   if (bestgood <= 0)
     printf("nothing in this range worked in the intended direction - every\r\n"
@@ -509,9 +524,9 @@ static void pts_finish(void)
     if (bestgood < 2 * pts_sd[best])
       printf("the best of them is inside its own error bar; repeat with more\r\n"
              "swings per point before trusting the ranking\r\n");
-    printf("'PTIME %u %u' then SAVE to keep the best\r\n",
-           pts_retard ? cfg.pulse_advance_us : pts_place(best),
-           pts_retard ? pts_place(best) : cfg.pulse_retard_us);
+    printf("'PTIME %ld %ld' then SAVE to keep the best\r\n",
+           (long)(pts_retard ? cfg.pulse_advance_us : pts_place(best)),
+           (long)(pts_retard ? pts_place(best) : cfg.pulse_retard_us));
   }
   printf("rate ppb is what the pulsing did to the pendulum's RATE - the\r\n"
          "amplitude side of the trade, in quadrature with the kick.  its own\r\n"
@@ -520,9 +535,11 @@ static void pts_finish(void)
          (long long)pts_ppbsd[best]);
 }
 
-bool control_ptime_scan(bool retard, uint32_t lo, uint32_t hi,
+bool control_ptime_scan(bool retard, int32_t lo, int32_t hi,
                         uint32_t steps, uint32_t swings)
 {
+  int32_t half;
+
   if (st != CTRL_TRACK) return false;
   /* Every point in the sweep is a MEASURE, so the same precondition holds;
      check it here rather than letting the banner print and the first point
@@ -538,9 +555,15 @@ bool control_ptime_scan(bool retard, uint32_t lo, uint32_t hi,
   if (steps > PTS_MAX) steps = PTS_MAX;
   if (swings < 5u) swings = 40u;
   if (swings > 200u) swings = 200u;
-  if (lo == 0u) lo = 10000u;
-  if (hi == 0u) hi = 60000u;
-  if (hi <= lo || hi > 65000u) return false;
+  if (lo == 0 && hi == 0) { lo = 10000; hi = 60000; }
+
+  /* Either offset can now reach a full half period from centre in either
+     direction - see the config.h comment - so the bound here scales with
+     THIS clock's period rather than the old fixed +-65535. */
+  half = (int32_t)(cfg_period_ns() / 1000ull / 2ull);
+  if (lo < -half) lo = -half;
+  if (hi >  half) hi =  half;
+  if (hi <= lo) return false;
 
   pts_on      = true;
   pts_retard  = retard;
@@ -549,15 +572,27 @@ bool control_ptime_scan(bool retard, uint32_t lo, uint32_t hi,
   pts_steps   = steps;
   pts_swings  = swings;
   pts_i       = 0u;
-  pts_settle  = 0u;
   pts_restore = retard ? cfg.pulse_retard_us : cfg.pulse_advance_us;
 
-  printf("sweeping %s placement %lu..%lu us in %lu steps, %lu swings each\r\n",
-         retard ? "retard" : "advance", (unsigned long)lo, (unsigned long)hi,
+  printf("sweeping %s placement %ld..%ld us in %lu steps, %lu swings each\r\n",
+         retard ? "retard" : "advance", (long)lo, (long)hi,
          (unsigned long)steps, (unsigned long)swings);
   printf("this takes about %lu seconds; keep away from the clock\r\n",
          (unsigned long)((steps * (swings + 12u) * (cfg_period_ns() / 1000000ull)) / 1000ull));
-  pts_start_point();
+
+  /* Point 0 used to arm the very instant this command ran, with no settle -
+     every OTHER point gets 12 swings after its predecessor's real pulses
+     to let the rate tracker and the demod baseline settle before its own
+     PRE window starts (see meas_finish()), but point 0 had nothing to
+     settle FROM on purpose, since there was no previous point.  That
+     reasoning misses whatever was going on right up to the moment this
+     command was typed - a live spend-mode correction, the tail of a
+     RATEKP reset, a config change - which point 0's PRE window then
+     measured as if it were signal.  Every later point got 12 clean swings
+     of insulation from exactly this kind of thing; point 0 deserves the
+     same, not zero.  Falling through the same settle path point 1..N-1 use
+     keeps this one honest instead of a special case. */
+  pts_settle = 12u;
   return true;
 }
 
@@ -649,16 +684,33 @@ static bool fire_for(const sense_event *ev, bool retard)
 {
   uint64_t period_us = cfg_period_ns() / 1000ull;
   uint64_t offset_us = (period_us * (uint64_t)cfg.drive_offset_ppt) / 1000ull;
-  uint64_t arrive    = ev->t_us + offset_us;   /* bob at the drive coil */
+  int64_t  centre    = (int64_t)(ev->t_us + offset_us);   /* bob at the drive coil */
+  int64_t  signed_when;
   uint64_t when;
 
-  if (retard)
-    when = arrive + cfg.pulse_retard_us;
-  else
-    when = arrive + period_us / 2ull - cfg.pulse_advance_us;
+  /* Both placements are the SAME signed offset from this same centre now -
+     see the comment on the config fields.  Retard and advance no longer
+     use opposite-signed formulas; the only difference is which stored
+     value gets read, so a given number always means the same physical
+     instant whether it is being tested or spent as a retard placement or
+     an advance one. */
+  signed_when = centre + (retard ? (int64_t)cfg.pulse_retard_us
+                                 : (int64_t)cfg.pulse_advance_us);
 
-  /* Whatever that worked out to, it has to be far enough ahead to schedule. */
-  while (when < ev->t_us + PULSE_LEAD_US) when += period_us;
+  /* Whatever that worked out to, it has to be far enough ahead to schedule -
+     and "far enough ahead of ev->t_us" is not the same thing as "far enough
+     ahead of now".  ev->t_us is the event's MIDPOINT, but the event is not
+     reported here until its falling edge completes, at roughly
+     t_us + width_us/2 - on this clock's ~400 ms wide events, close to
+     200 ms after the timestamp being measured against.  A placement close
+     enough to t_us to still clear the old fixed PULSE_LEAD_US margin can
+     already be in the past by the time drive_pulse_at() actually checks it
+     against time_us_64(), and every one of those pulses gets silently
+     refused - which is exactly what a placement near +-half a period from
+     centre can now reach, and the old design never could. */
+  while (signed_when < (int64_t)(ev->t_us + ev->width_us / 2u + PULSE_LEAD_US))
+    signed_when += (int64_t)period_us;
+  when = (uint64_t)signed_when;
 
   return drive_pulse_at(when, cfg.pulse_us);
 }
@@ -865,7 +917,12 @@ void control_poll(void)
 
   while (sense_next_event(&ev))
   {
-    if (ev_echo)
+    /* Never during CTRL_MEASURE: fire_for() below has to schedule against
+       this same event before its wrap-forward margin (PULSE_LEAD_US) runs
+       out, and a USB-CDC printf() can block for tens of milliseconds if
+       the host is slow to drain it - long enough to eat that margin
+       outright for a placement that had little of it to begin with. */
+    if (ev_echo && st != CTRL_MEASURE)
       printf("ev %lu  t %llu us  peak %u  base %u  width %lu us  gap %lld us"
              "  demod %ld ns\r\n",
              (unsigned long)ev.seq, (unsigned long long)ev.t_us,

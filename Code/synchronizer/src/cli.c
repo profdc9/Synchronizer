@@ -189,8 +189,8 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("\r\n-- drive ------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "coil", drive_is_on() ? "ON" : "off");
-  printf("%-22s %u us wide, %u us advance, %u us retard\r\n", "pulse",
-         cfg.pulse_us, cfg.pulse_advance_us, cfg.pulse_retard_us);
+  printf("%-22s %u us wide, %ld us advance, %ld us retard\r\n", "pulse",
+         cfg.pulse_us, (long)cfg.pulse_advance_us, (long)cfg.pulse_retard_us);
   printf("%-22s advance %ld ns, retard %ld ns\r\n", "authority",
          (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns);
   if (!cfg.auth_advance_ns && !cfg.auth_retard_ns)
@@ -474,10 +474,10 @@ static int pw_cmd(int args, tinycl_parameter *tp, void *v)
 static int ptime_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
-  cfg.pulse_advance_us = (uint16_t)tp[0].ti.i;
-  cfg.pulse_retard_us  = (uint16_t)tp[1].ti.i;
-  printf("advance %u us before arrival, retard %u us after\r\n",
-         cfg.pulse_advance_us, cfg.pulse_retard_us);
+  cfg.pulse_advance_us = (int32_t)tp[0].ti.i;
+  cfg.pulse_retard_us  = (int32_t)tp[1].ti.i;
+  printf("advance offset %ld us, retard offset %ld us, both from centre\r\n",
+         (long)cfg.pulse_advance_us, (long)cfg.pulse_retard_us);
   return 1;
 }
 
@@ -573,10 +573,10 @@ static int measure_cmd(int args, tinycl_parameter *tp, void *v)
 static int ptimescan_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
-  if (!control_ptime_scan(tp[0].tb.b, (uint32_t)tp[1].ti.i,
-                          (uint32_t)tp[2].ti.i, (uint32_t)tp[3].ti.i,
+  if (!control_ptime_scan(tp[0].tb.b, (int32_t)tp[1].ti.i,
+                          (int32_t)tp[2].ti.i, (uint32_t)tp[3].ti.i,
                           (uint32_t)tp[4].ti.i))
-    printf("needs the loop tracking, and lo < hi <= 65000\r\n");
+    printf("needs the loop tracking, and lo < hi, both within +-half a period\r\n");
   return 1;
 }
 
@@ -914,6 +914,57 @@ static int save_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+/* Everything a config-layout change (CONFIG_VERSION) or a bad flash wipes,
+   as the exact commands that put it back - so a reflash is "paste this
+   back in" rather than "remember what THRESH, WINDOWS, PTIME and AUTH
+   were before". WIFI/APKEY/HOSTNAME are deliberately left out: they live
+   in their own flash sector (see config.h) and survive a version bump on
+   their own, so replaying them here would be redundant at best and would
+   echo the Wi-Fi password back over the console at worst. tank_f0_hz and
+   friends are RESONANCE's measured output, not a setting - run RESONANCE
+   again rather than trying to restore a number here. */
+static int recreate_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)tp; (void)v;
+  printf("# copy the lines below, in order, into a fresh device -\r\n"
+         "# wifi/hostname survive a reset on their own and are not here\r\n");
+  printf("BPH %lu %u\r\n",
+         (unsigned long)cfg.beats_per_hour, cfg.beats_per_period);
+  printf("GEOMETRY %u %u\r\n", cfg.events_per_period, cfg.drive_offset_ppt);
+  printf("TANK %lu\r\n", (unsigned long)cfg.tank_hz);
+  printf("DRIVE %lu\r\n", (unsigned long)cfg.tank_drive_ns);
+  printf("THRESH %u\r\n", cfg.detect_threshold);
+  printf("DIR %s\r\n", cfg.detect_falling ? "Y" : "N");
+  printf("SENSE %s\r\n", cfg.sense_enabled ? "Y" : "N");
+  printf("HYST %u\r\n", cfg.detect_hyst_pct);
+  printf("FILTER %u %u %u\r\n",
+         cfg.env_oversample, cfg.env_trim, cfg.baseline_shift);
+  printf("SAMPLE %lu\r\n", (unsigned long)cfg.sample_hz);
+  printf("WINDOWS %u %u %u\r\n",
+         cfg.rearm_pct, cfg.min_event_pct, cfg.max_event_pct);
+  printf("LOCK %u %u\r\n", cfg.acquire_events, cfg.acquire_tol_pct);
+  printf("PW %lu\r\n", (unsigned long)cfg.pulse_us);
+  printf("PTIME %ld %ld\r\n",
+         (long)cfg.pulse_advance_us, (long)cfg.pulse_retard_us);
+  printf("AUTH %ld %ld\r\n",
+         (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns);
+  printf("RATEKP %lu\r\n", (unsigned long)cfg.rate_kp_events);
+  printf("NTPKP %lu\r\n", (unsigned long)cfg.tb_kp_fixes);
+  printf("GAINS %lu %lu\r\n",
+         (unsigned long)cfg.kp_swings, (unsigned long)cfg.ki_swings);
+  printf("SLEW %ld\r\n", (long)cfg.slew_limit_ppm);
+  printf("CHIMESET %lu %lu\r\n",
+         (unsigned long)cfg.chime_interval_min,
+         (unsigned long)cfg.chime_latency_ms);
+  printf("TZ %ld\r\n", (long)(cfg.tz_offset_s / 60));
+  printf("NTP %s\r\n", cfg.ntp_host);
+  printf("CONTROL %s\r\n", cfg.control_enabled ? "Y" : "N");
+  printf("SAVE\r\n");
+  printf("# tank resonance (RESONANCE) and CHIME are measured live, not\r\n"
+         "# stored settings - redo them, do not try to script them\r\n");
+  return 1;
+}
+
 static int defaults_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)tp; (void)v;
@@ -984,6 +1035,7 @@ static const tinycl_command tcmds[] =
   { "APKEY",    "password for the setup access point",    apkey_cmd,    {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "HOSTNAME", "name advertised over mdns",              hostname_cmd, {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "SAVE",     "write configuration to flash",           save_cmd,     {TINYCL_PARM_END} },
+  { "RECREATE", "print the commands that rebuild this config", recreate_cmd, {TINYCL_PARM_END} },
   { "DEFAULTS", "load defaults into ram",                 defaults_cmd, {TINYCL_PARM_END} },
   { "BOOTSEL",  "reboot into the uf2 bootloader",         bootsel_cmd,  {TINYCL_PARM_END} },
 };
