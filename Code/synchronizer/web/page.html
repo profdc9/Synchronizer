@@ -208,7 +208,8 @@ from here is visible to anyone watching it.</p>
 <input id="cmd" list="cmds" placeholder="STATUS" autocapitalize="none" autocorrect="off"
  spellcheck="false" onkeydown="cliKey(event)">
 <button class="p" id="runbtn" onclick="run()">Run</button>
-<button id="clrbtn" onclick="cliClear()">Clear</button></div>
+<button id="clrbtn" onclick="cliClear()">Clear</button>
+<button id="copybtn" onclick="cliCopy()">Copy</button></div>
 <datalist id="cmds">
 <option value="HELP"><option value="STATUS"><option value="NET">
 <option value="SYNC">
@@ -247,6 +248,21 @@ function cliAdd(s){var o=$('out');
  if(s&&s.slice(-1)!='\n')s+='\n';
  o.textContent+=s;o.scrollTop=o.scrollHeight}
 function cliClear(){$('out').textContent='Nothing run yet.';cliempty=true}
+
+/* navigator.clipboard needs a secure context, which this device - served
+   over plain HTTP on the LAN - is not in most browsers, so it is tried
+   first but never relied on; execCommand('copy') on a hidden textarea
+   works everywhere and is the real fallback. */
+function cliCopy(){var b=$('copybtn'),old=b.textContent,txt=cliempty?'':$('out').textContent;
+ function flash(s){b.textContent=s;setTimeout(function(){b.textContent=old},1200)}
+ function fallback(){var ta=document.createElement('textarea');
+  ta.value=txt;ta.style.position='fixed';ta.style.top='-1000px';
+  document.body.appendChild(ta);ta.focus();ta.select();
+  var ok=false;try{ok=document.execCommand('copy')}catch(e){}
+  document.body.removeChild(ta);flash(ok?'Copied':'Copy failed')}
+ if(navigator.clipboard&&navigator.clipboard.writeText)
+  navigator.clipboard.writeText(txt).then(function(){flash('Copied')},fallback);
+ else fallback()}
 
 function cliKey(e){
  if(e.key=='Enter'){run();return}

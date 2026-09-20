@@ -236,7 +236,8 @@ const char web_page[] =
   "<input id=\"cmd\" list=\"cmds\" placeholder=\"STATUS\" autocapitalize=\"none\" autocorrect=\"off\"\n"
   " spellcheck=\"false\" onkeydown=\"cliKey(event)\">\n"
   "<button class=\"p\" id=\"runbtn\" onclick=\"run()\">Run</button>\n"
-  "<button id=\"clrbtn\" onclick=\"cliClear()\">Clear</button></div>\n"
+  "<button id=\"clrbtn\" onclick=\"cliClear()\">Clear</button>\n"
+  "<button id=\"copybtn\" onclick=\"cliCopy()\">Copy</button></div>\n"
   "<datalist id=\"cmds\">\n"
   "<option value=\"HELP\"><option value=\"STATUS\"><option value=\"NET\">\n"
   "<option value=\"SYNC\">\n"
@@ -258,7 +259,7 @@ const char web_page[] =
   "var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;\n"
   "var hist=[],hpos=0,hdraft='';\n"
   "var logcur=-1;\n"
-  "var WEBVER='b877efb2';\n"
+  "var WEBVER='a6db6469';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -275,6 +276,21 @@ const char web_page[] =
   " if(s&&s.slice(-1)!='\\n')s+='\\n';\n"
   " o.textContent+=s;o.scrollTop=o.scrollHeight}\n"
   "function cliClear(){$('out').textContent='Nothing run yet.';cliempty=true}\n"
+  "\n"
+  "/* navigator.clipboard needs a secure context, which this device - served\n"
+  "   over plain HTTP on the LAN - is not in most browsers, so it is tried\n"
+  "   first but never relied on; execCommand('copy') on a hidden textarea\n"
+  "   works everywhere and is the real fallback. */\n"
+  "function cliCopy(){var b=$('copybtn'),old=b.textContent,txt=cliempty\?'':$('out').textContent;\n"
+  " function flash(s){b.textContent=s;setTimeout(function(){b.textContent=old},1200)}\n"
+  " function fallback(){var ta=document.createElement('textarea');\n"
+  "  ta.value=txt;ta.style.position='fixed';ta.style.top='-1000px';\n"
+  "  document.body.appendChild(ta);ta.focus();ta.select();\n"
+  "  var ok=false;try{ok=document.execCommand('copy')}catch(e){}\n"
+  "  document.body.removeChild(ta);flash(ok\?'Copied':'Copy failed')}\n"
+  " if(navigator.clipboard&&navigator.clipboard.writeText)\n"
+  "  navigator.clipboard.writeText(txt).then(function(){flash('Copied')},fallback);\n"
+  " else fallback()}\n"
   "\n"
   "function cliKey(e){\n"
   " if(e.key=='Enter'){run();return}\n"
@@ -510,4 +526,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
-const char web_version[] = "b877efb2";
+const char web_version[] = "a6db6469";
