@@ -183,6 +183,9 @@ void config_defaults(void)
   cfg.chime_valid        = 0u;
 
   cfg.control_enabled = 0u;       /* never runs until it is switched on    */
+  cfg.control_mode    = 1u;       /* KICK: no authority measurement needed */
+  cfg.kick_retard      = 0u;       /* advance - arbitrary; set per clock   */
+  cfg.kick_min_swings  = 5u;
   cfg.kp_swings       = 4200u;    /* one hour of swings                  */
   cfg.ki_swings       = 12600u;   /* three hours                         */
   cfg.slew_limit_ppm  = 500;      /* 0.43 ms per swing, a hard ceiling   */

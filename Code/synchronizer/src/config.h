@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  18u
+#define CONFIG_VERSION  19u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -166,7 +166,20 @@ typedef struct _synchronizer_config
 
   /* --- control loop ----------------------------------------------- */
   uint8_t  control_enabled;
-  uint8_t  pad0[3];
+  /* Which algorithm turns phase error into pulses while CONTROL is on.
+       0 = AUTH: spend the phase error against a measured ns-per-pulse
+           price (auth_advance_ns/auth_retard_ns below) - needs MEASURE or
+           PTIMESCAN run first, but once priced it can spend either
+           direction as needed.
+       1 = KICK: a simple one-directional hysteresis scheme that needs no
+           measured authority at all - see kick_retard/kick_min_swings
+           below and the kick_step() comment in control.c.  This is the
+           default: it works with nothing calibrated yet. */
+  uint8_t  control_mode;
+  uint8_t  kick_retard;         /* KICK mode: 0 advance, 1 retard          */
+  uint8_t  pad0;
+  uint16_t kick_min_swings;     /* KICK mode: min swings between pulses    */
+  uint16_t pad0b;
   /* The loop is parameterised in swings rather than seconds because the
      pendulum, not the wall clock, is what it acts on.  kp_swings is the
      number of swings over which a standing phase error would be taken out

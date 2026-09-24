@@ -30,11 +30,13 @@
 #include "hardware/dma.h"
 #include "hardware/clocks.h"
 #include "hardware/watchdog.h"
+#include "conout.h"
 #include "board.h"
 #include "config.h"
 #include "sense.h"
 #include "timebase.h"
 #include "control.h"
+#include "drive.h"
 
 /* Baseline tracking.  At 1 kHz a shift of 12 is a time constant of about
    four seconds - long compared with the 0.2 s bump, short enough to follow
@@ -171,6 +173,31 @@ static bool     fall_pending;    /* crossed thr downward, not yet confirmed */
 static uint64_t fall_at_us;      /* when it crossed, timed at thr itself    */
 static uint32_t chatter;         /* crossings that climbed back over thr    */
 static uint32_t rejected;        /* events the width gate threw out         */
+
+/* CHATTERTRACE: a live scope-trigger, not a separate borrowed-ADC capture
+   like TRACE/PULSETRACE.  Those run at a moment that has no relationship
+   to when a chatter event actually happens, so a clean capture proves
+   nothing about the swings that DO chatter - most don't, so a handful of
+   clean traces are exactly what "chatter is intermittent" predicts.  This
+   instead records every tick's real sample into a small rolling ring, all
+   the time, at no real cost, and freezes it the instant chatter++ actually
+   fires - so the dump is the real detector's own data on a tick that
+   genuinely chattered, not a hopeful re-creation of one. */
+/* 64, not 128: the dump (~36 bytes/row) has to fit inside BOTH the 4096-
+   byte console ring and webui.c's 4000-byte CLI_OUT_MAX, and 128 rows was
+   about 4.6 KB - too big for either, so it silently truncated the same way
+   on both the serial console and curl against /api/cli regardless of any
+   drain pacing.  This was never a timing bug - the capture just needed to
+   be smaller than the fixed buffers it has to travel through. */
+#define CHAT_RING       64u      /* ~64 ms of history at SAMPLE=1000        */
+#define CHAT_RING_MASK  (CHAT_RING - 1u)
+static uint16_t chat_s[CHAT_RING];
+static int16_t  chat_dev[CHAT_RING];
+static uint32_t chat_head;
+static bool     chat_armed;
+static bool     chat_captured;
+static uint16_t chat_snap_s[CHAT_RING];
+static int16_t  chat_snap_dev[CHAT_RING];
 
 /* Reacquiring the baseline - cold boot, or the moment sampling resumes
    after a diagnostic or an abandoned event - used to seed it from a single
@@ -426,6 +453,10 @@ static bool sample_cb(repeating_timer_t *rt)
   dev = cfg.detect_falling ? (base - (int32_t)s) : ((int32_t)s - base);
   thr = (int32_t)cfg.detect_threshold;
 
+  chat_s[chat_head & CHAT_RING_MASK]   = s;
+  chat_dev[chat_head & CHAT_RING_MASK] = (int16_t)dev;
+  chat_head++;
+
   /* Exponentially smoothed I/Q, run every tick regardless of in_event and
      NEVER reset except at baseline_reacquire() - read off (not reset) at
      each edge crossing below.  The reference step is corrected to true
@@ -504,6 +535,18 @@ static bool sample_cb(repeating_timer_t *rt)
     {
       fall_pending = false;
       chatter++;
+      if (chat_armed && !chat_captured)
+      {
+        uint32_t k;
+        for (k = 0; k < CHAT_RING; k++)
+        {
+          uint32_t idx = (chat_head - CHAT_RING + k) & CHAT_RING_MASK;
+          chat_snap_s[k]   = chat_s[idx];
+          chat_snap_dev[k] = chat_dev[idx];
+        }
+        chat_captured = true;
+        chat_armed    = false;
+      }
     }
 
     if (fall_pending && dev < thr_lo)
@@ -659,6 +702,8 @@ void sense_sweep(uint32_t from_hz, uint32_t to_hz, uint32_t step_hz, uint32_t dw
   {
     uint32_t acc = 0, i;
     watchdog_update();          /* a wide sweep outruns the eight seconds */
+    conout_poll();               /* ...and can print more than the console
+                                     ring buffer holds if it never drains */
     tank_apply(f);
     sleep_ms(dwell_ms);
     adc_select_input(ADC_CH_AMPLITUDE);
@@ -718,6 +763,7 @@ void sense_mod_scan(uint32_t lo, uint32_t hi, uint32_t steps)
     sense_env_stats st;
     hz[i] = lo + ((hi - lo) * i) / (steps - 1u);
     watchdog_update();          /* several seconds a point outruns eight */
+    conout_poll();
     tank_apply(hz[i]);
     sleep_ms(30);               /* let the tank and the detector settle */
     sense_envelope(window_ms, &st);
@@ -755,8 +801,15 @@ void sense_mod_scan(uint32_t lo, uint32_t hi, uint32_t steps)
 
 void sense_trace(uint32_t ms)
 {
-  static uint16_t tbuf[512];
-  const uint32_t n = 512u, rows = 64u;
+  /* 1536, not 512: at native ~1ms/sample (matching SAMPLE) a 512-point
+     buffer only covers ~512 ms, less than one nominal period - whether a
+     call happens to catch the recovery/trailing edge as well as the
+     descent depends on luck-of-phase-alignment with where in the swing it
+     started.  1536 ms covers a full period with margin regardless of
+     where it starts, so one TRACE call at native rate is enough to see
+     both edges. */
+  static uint16_t tbuf[1536];
+  const uint32_t n = 1536u, rows = 64u;
   uint32_t i, per_us, g;
   uint16_t mn = 0xffffu, mx = 0u;
   int32_t  span;
@@ -790,6 +843,7 @@ void sense_trace(uint32_t ms)
   {
     uint32_t j, lo = 0xffffu, hi = 0u;
     int32_t  a, b;
+    conout_poll();
     for (j = i * g; j < (i + 1u) * g; j++)
     {
       if (tbuf[j] < lo) lo = tbuf[j];
@@ -802,6 +856,116 @@ void sense_trace(uint32_t ms)
     for (j = 0; (int32_t)j <= b; j++) putchar(((int32_t)j >= a) ? '#' : ' ');
     printf("\r\n");
   }
+}
+
+void sense_pulse_trace(uint32_t pulse_us, uint32_t ms)
+{
+  static uint16_t tbuf[512];
+  const uint32_t n = 512u, rows = 64u;
+  const uint32_t pulse_i = n / 4u;   /* a quarter in: lead-in to show the
+                                        resting envelope, three quarters
+                                        after to show how far it reaches */
+  uint32_t i, per_us, g, pulse_row;
+  uint16_t mn = 0xffffu, mx = 0u;
+  int32_t  span;
+  bool     fired = false;
+
+  if (ms == 0u)        ms = 2000u;
+  if (ms > 3000u)       ms = 3000u;     /* stay well inside the watchdog */
+  if (pulse_us == 0u)  pulse_us = cfg.pulse_us;
+  per_us = (ms * 1000u) / n;
+
+  /* sense_diag_begin() blinds the detector and, if the loop was tracking,
+     turns the coil off - BEFORE the pulse below is fired, not after, so
+     there is nothing here to clobber it the way drive_coil_test() once
+     did (see drive.c). */
+  sense_diag_begin();
+  adc_select_input(ADC_CH_AMPLITUDE);
+  for (i = 0; i < n; i++)
+  {
+    uint64_t t = time_us_64();
+    tbuf[i] = (uint16_t)adc_read();
+    if (i == pulse_i) fired = drive_pulse(pulse_us);
+    while ((time_us_64() - t) < (uint64_t)per_us) tight_loop_contents();
+  }
+  sense_diag_end();
+
+  for (i = 0; i < n; i++)
+  {
+    if (tbuf[i] < mn) mn = tbuf[i];
+    if (tbuf[i] > mx) mx = tbuf[i];
+  }
+  span = (int32_t)mx - (int32_t)mn;
+  if (span < 1) span = 1;
+
+  printf("envelope over %lu ms, %lu points every %lu us, range %u..%u\r\n",
+         (unsigned long)ms, (unsigned long)n, (unsigned long)per_us, mn, mx);
+  printf("pulse %lu us %s at t=%lu ms - marked '*' below\r\n",
+         (unsigned long)pulse_us, fired ? "fired" : "REFUSED (too wide, or duty budget spent)",
+         (unsigned long)((pulse_i * per_us) / 1000u));
+  g = n / rows;
+  pulse_row = pulse_i / g;
+  for (i = 0; i < rows; i++)
+  {
+    uint32_t j, lo = 0xffffu, hi = 0u;
+    int32_t  a, b;
+    conout_poll();
+    for (j = i * g; j < (i + 1u) * g; j++)
+    {
+      if (tbuf[j] < lo) lo = tbuf[j];
+      if (tbuf[j] > hi) hi = tbuf[j];
+    }
+    a = ((int32_t)lo - (int32_t)mn) * 46 / span;
+    b = ((int32_t)hi - (int32_t)mn) * 46 / span;
+    printf("%6lu %5lu %s", (unsigned long)((i * g * per_us) / 1000u),
+           (unsigned long)((lo + hi) / 2u), (i == pulse_row) ? "*" : " ");
+    for (j = 0; (int32_t)j <= b; j++) putchar(((int32_t)j >= a) ? '#' : ' ');
+    printf("\r\n");
+  }
+}
+
+void sense_chatter_arm(void)
+{
+  chat_captured = false;
+  chat_armed    = true;
+}
+
+bool sense_chatter_ready(void) { return chat_captured; }
+
+void sense_chatter_dump(void)
+{
+  uint32_t i;
+  int32_t  thr = (int32_t)cfg.detect_threshold;
+  int32_t  thr_lo = thr - (thr * (int32_t)cfg.detect_hyst_pct) / 100;
+
+  if (thr_lo < 1) thr_lo = 1;
+
+  if (!chat_captured)
+  {
+    printf(chat_armed
+           ? "armed - waiting for a real chatter event during ordinary tracking\r\n"
+           : "no capture yet - run CHATTERTRACE once to arm it\r\n");
+    return;
+  }
+
+  printf("chatter capture: %u ticks ending on the tick that tripped it "
+         "(thr %ld, thr_lo %ld)\r\n", CHAT_RING, (long)thr, (long)thr_lo);
+  printf("%6s %6s %6s\r\n", "ms", "sample", "dev");
+  for (i = 0; i < CHAT_RING; i++)
+  {
+    int32_t dev = chat_snap_dev[i];
+    conout_poll();
+    const char *tag = (i == CHAT_RING - 1u) ? "  <-- chatter"
+                     : (dev >= thr)         ? "  above thr"
+                     : (dev < thr_lo)       ? "  below thr_lo"
+                                            : "";
+    printf("%6ld %6u %6ld%s\r\n",
+           (long)i - (long)(CHAT_RING - 1u), chat_snap_s[i], (long)dev, tag);
+  }
+
+  chat_captured = false;
+  chat_armed    = true;      /* ready to catch the next one without being asked again */
+  printf("re-armed for the next chatter event\r\n");
 }
 
 void sense_envelope(uint32_t ms, sense_env_stats *out)
@@ -918,6 +1082,7 @@ static uint16_t measure_at(uint32_t hz, uint32_t dwell_ms)
 {
   uint32_t acc = 0, i;
   watchdog_update();
+  conout_poll();
   tank_apply(hz);
   sleep_ms(dwell_ms);
   adc_select_input(ADC_CH_AMPLITUDE);
@@ -974,6 +1139,7 @@ static void plot_scan(uint32_t n, uint16_t floor_adc, uint16_t peak_adc)
   {
     int32_t v = ((int32_t)scan_adc[i] - (int32_t)floor_adc) * 46 / span;
     int32_t k;
+    conout_poll();
     if (v < 0) v = 0;
     if (v > 46) v = 46;
     printf("%8lu %6u |", (unsigned long)scan_hz[i], scan_adc[i]);

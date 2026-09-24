@@ -55,6 +55,10 @@ int32_t  tb_ppb(void);            /* current rate correction              */
 int64_t  tb_last_offset_ns(void); /* offset of the last accepted fix      */
 uint32_t tb_fix_count(void);
 uint64_t tb_last_fix_us(void);    /* local timer reading of the last fix  */
+/* Whether the last accepted fix was large enough to step the phase outright
+   rather than slew it in proportionally - the branch with no gain at all,
+   so a bad fix lands in the model in one shot. */
+bool     tb_last_was_step(void);
 
 #ifdef __cplusplus
 }

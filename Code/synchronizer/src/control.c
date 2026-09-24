@@ -54,16 +54,6 @@
 
 static control_state st = CTRL_IDLE;
 
-/* The schedule is kept in EVENTS, not swings: a sense coil at the centre
-   of the swing reports twice per period, one at an extreme reports once,
-   and the loop should not care which.  cfg_event_ratio gives the interval
-   as an exact rational so the accumulator never drifts. */
-static uint64_t ev_whole_ns;            /* num / den, integer part        */
-static uint64_t ev_rem;                 /* and remainder, over den        */
-static uint64_t ev_den;
-
-static uint64_t exp_ns;                 /* expected UTC of the next event */
-static uint64_t exp_frac;
 static uint64_t events;
 static uint32_t missed;
 
@@ -81,11 +71,15 @@ static int64_t  integ;
    onto the measured events, and the learned rate IS the period estimate -
    with every event contributing and the loop's whole integration behind it.
 
-   This is a measuring instrument, not a reference.  The schedule the
-   discipline loop steers against stays pinned to UTC; nothing here touches
-   it.  What it earns is feedforward: the loop can command the standing
-   correction directly instead of making its integrator rediscover a number
-   we already know.
+   This used to be purely a measuring instrument, feeding only feedforward,
+   while a SEPARATE, undisciplined accumulator (exp_ns, since removed) ran
+   the loss-of-lock check at a fixed nominal rate with no correction ever
+   reaching it - so it drifted from real UTC by design, at whatever rate
+   the pendulum differs from nominal, and eventually crossed the slip
+   threshold on its own with no actual disturbance behind it.  rerr, this
+   NCO's own residual, is what the slip check measures against now - it is
+   already continuously disciplined, so it stays bounded under normal
+   tracking and a real anomaly still shows up in it just as clearly.
 
    A note on the crystal.  Both this and the phase error are measured in
    disciplined UTC ns, so a crystal error is common-mode between them and
@@ -110,6 +104,11 @@ static int64_t  target_off;
 static int64_t  last_err;
 static int64_t  filt_err;
 static int64_t  drift_ppb;
+
+/* --- KICK mode: a one-directional hysteresis scheme that needs no
+   measured authority at all - see kick_step() below. */
+static bool     kick_active;
+static uint32_t kick_since;
 
 static uint32_t acq_run;
 static uint64_t acq_prev_utc;
@@ -264,48 +263,58 @@ static int64_t  pts_ppbsd[PTS_MAX];
 static int32_t  pts_restore;
 
 static bool ev_echo;
+static bool actuator_on = true;    /* CONTROL Y/N idles the whole loop -
+                                       this mutes only the corrective
+                                       pulses; tracking runs either way   */
 
 void control_set_echo(bool on) { ev_echo = on; }
 bool control_echo(void) { return ev_echo; }
+
+void control_set_actuator(bool on) { actuator_on = on; }
+bool control_actuator(void) { return actuator_on; }
+
+/* --- PHASELOG: a periodic one-line summary, independent of WATCH's
+   per-event echo (which is far too verbose to leave running unattended -
+   see the console-bytes-dropped counter in STATUS once it has been on for
+   a while).  This is meant to be left on for hours: phase error and how
+   many corrective pulses fired - AUTH spends or KICK kicks, whichever
+   mode is running - since the last line, once every phaselog_secs. */
+static uint32_t phaselog_secs;      /* 0 = off                            */
+static uint64_t phaselog_last_us;
+static uint32_t disc_pulses;        /* corrective pulses fired by AUTH's
+                                        spend or KICK's kick_step - not
+                                        MEASURE/PTIMESCAN/manual PULSE     */
+static uint32_t phaselog_last_pulses;
+
+void control_set_phaselog(uint32_t secs)
+{
+  phaselog_secs = secs;
+  phaselog_last_us = 0ull;          /* rearm: next line is a full interval
+                                        from now, not whatever is left of
+                                        an old one */
+  phaselog_last_pulses = disc_pulses;
+}
+
+uint32_t control_phaselog(void) { return phaselog_secs; }
 
 static uint64_t event_ns_nominal(void)
 {
   return cfg_event_interval_ns();
 }
 
-static void exp_advance(int64_t k)
-{
-  if (k <= 0) return;
-  exp_ns += (uint64_t)k * ev_whole_ns;
-  {
-    uint64_t r = exp_frac + (uint64_t)k * ev_rem;
-    exp_ns  += r / ev_den;
-    exp_frac = r % ev_den;
-  }
-}
-
-static void recompute_constants(void)
-{
-  uint64_t num;
-  cfg_event_ratio(&num, &ev_den);
-  if (ev_den == 0ull) ev_den = 1ull;
-  ev_whole_ns = num / ev_den;
-  ev_rem      = num % ev_den;
-}
-
 void control_init(void)
 {
-  recompute_constants();
   control_reset();
   st = cfg.control_enabled ? CTRL_ACQUIRE : CTRL_IDLE;
 }
 
 void control_reset(void)
 {
-  exp_ns = 0; exp_frac = 0; events = 0; missed = 0;
+  events = 0; missed = 0;
   integ = 0; cmd_ns = 0; credit_ns = 0;
   rate_have = false; rate_q = 0; rate_acc = 0; rate_n = 0;
   last_err = 0; filt_err = 0; drift_ppb = 0;
+  kick_active = false; kick_since = 0;
   acq_run = 0; acq_prev_utc = 0;
   meas_fired = 0; meas_resid = 0; m_phase = MP_NONE;
   pts_on = false; pts_settle = 0;
@@ -328,7 +337,11 @@ void control_set_offset_ns(int64_t o) { target_off = o; }
    to start meaning something for the first time.  Either way the honest
    thing is to start the spend fresh rather than dump whatever built up
    under the old (or absent) authority onto the actuator in one burst. */
-void control_clear_credit(void) { credit_ns = 0; integ = 0; }
+void control_clear_credit(void)
+{
+  credit_ns = 0; integ = 0;
+  kick_active = false; kick_since = 0;
+}
 
 const char *control_state_name(control_state s)
 {
@@ -343,17 +356,49 @@ const char *control_state_name(control_state s)
   return "?";
 }
 
+/* Whatever forced this - lost NTP time, a schedule slip too large to
+   trust, the detector going quiet, or an explicit control_blind() - the
+   loop is leaving TRACK/ACQUIRE/MEASURE in a way nothing downstream
+   expects, and anything mid-flight has to be torn down with it, not just
+   the state variable.  A measurement across the gap is garbage, so
+   m_phase is cleared; a PTIMESCAN sweep built out of one is worse than
+   garbage, because nothing outside CTRL_MEASURE ever calls
+   pts_start_point() again - left set, pts_on would sit true forever,
+   silently waiting for a meas_finish() that can now never come.  That
+   is exactly what used to happen: this cleanup lived only in
+   control_blind(), so a schedule slip or a lost NTP fix mid-sweep
+   orphaned it instead, and PTIMESCAN looked hung with no error, no
+   abandonment message, nothing - while STATUS and ordinary tracking
+   carried on as if nothing had happened.  Every site that forces
+   CTRL_HOLD goes through here now so none of them can forget either
+   half again. */
+static void enter_hold(const char *why)
+{
+  control_state was = st;
+
+  m_phase = MP_NONE;
+  if (pts_on)
+  {
+    pts_on = false;
+    if (pts_retard) cfg.pulse_retard_us  = pts_restore;
+    else            cfg.pulse_advance_us = pts_restore;
+    printf("PTIMESCAN sweep abandoned - lost lock; placement restored to "
+           "%ld us\r\n", (long)pts_restore);
+  }
+  /* Only worth a line when it actually cost a lock, not on every explicit
+     CONTROL N or the one hold before the first fix ever lands. */
+  if (was == CTRL_TRACK || was == CTRL_MEASURE)
+    printf("hold: %s\r\n", why);
+  st = CTRL_HOLD;
+  drive_all_off();             /* nothing queued should fire while blind */
+}
+
 control_state control_blind(void)
 {
   control_state was = st;
 
   if (st == CTRL_TRACK || st == CTRL_ACQUIRE || st == CTRL_MEASURE)
-  {
-    m_phase   = MP_NONE;       /* a measurement across a gap is garbage */
-    pts_on    = false;         /* and so is a sweep built out of them    */
-    st        = CTRL_HOLD;
-    drive_all_off();           /* nothing queued should fire while blind */
-  }
+    enter_hold("blind requested");
   return was;
 }
 
@@ -463,17 +508,20 @@ static void pts_start_point(void)
   }
 }
 
-/* Rank by what the sweep was asked to produce, not by how big the number
-   came out.  A retard sweep wants the most POSITIVE kick and an advance
-   sweep the most negative; ranking on magnitude picks whichever placement
-   was furthest from doing its job as enthusiastically as the one that did
-   it best, and on this clock it did exactly that - the winner was a
-   sign-flipped outlier on the wrong side of the turning point. */
+/* A sweep answers two questions, not one: which placement in this range is
+   the best ADVANCE and which is the best RETARD.  Sign is physical, not a
+   matter of which direction the sweep was launched under - see the
+   config.h comment on pulse_advance_us/pulse_retard_us, where a given
+   placement means the same instant either way - so negative per is always
+   advance and positive is always retard, regardless of pts_retard.
+   Ranking within each side separately, rather than by raw magnitude, is
+   what keeps a sign-flipped outlier from looking like the winner of the
+   side it is not even on. */
 static void pts_finish(void)
 {
-  uint32_t i, best = 0u;
-  int64_t  bestgood = 0, span = 0;
-  bool     have = false;
+  uint32_t i, best_adv = 0u, best_ret = 0u;
+  int64_t  bestneg = 0, bestpos = 0, span = 0;
+  bool     have_adv = false, have_ret = false;
 
   pts_on = false;
   if (pts_retard) cfg.pulse_retard_us  = pts_restore;
@@ -481,25 +529,28 @@ static void pts_finish(void)
 
   for (i = 0; i < pts_steps; i++)
   {
-    int64_t g = pts_retard ? pts_ns[i] : -pts_ns[i];
+    int64_t g = pts_ns[i];             /* negative = advance, positive = retard */
     int64_t a = (g < 0) ? -g : g;
-    if (!have || g > bestgood) { bestgood = g; best = i; have = true; }
+    if (g < 0 && (!have_adv || g < bestneg)) { bestneg = g; best_adv = i; have_adv = true; }
+    if (g > 0 && (!have_ret || g > bestpos)) { bestpos = g; best_ret = i; have_ret = true; }
     if (a > span) span = a;
   }
 
   printf("\r\n%s placement sweep\r\n", pts_retard ? "retard" : "advance");
   printf("%10s %12s %9s %9s   %s\r\n",
-         "us", "ns/pulse", "+/-", "rate ppb", "wrong <-- | --> working");
+         "us", "ns/pulse", "+/-", "rate ppb", "advance <-- | --> retard");
   for (i = 0; i < pts_steps; i++)
   {
-    /* The bar is drawn in the USEFUL direction: right is the sweep doing
-       what it was asked, left is a placement pushing the clock the other
-       way.  Sign is the thing being looked for here, so it has to be the
-       thing the picture shows. */
-    int64_t  g = pts_retard ? pts_ns[i] : -pts_ns[i];
+    /* Left is always advance, right is always retard - the picture shows
+       what the placement physically did, not whether it matched what was
+       asked for. */
+    int64_t  g = pts_ns[i];
     int64_t  a = (g < 0) ? -g : g;
     uint32_t k, len = (uint32_t)(span ? (a * 14) / span : 0);
     char     bar[32];
+    const char *tag = (i == best_adv && have_adv) ? "  <-- best advance"
+                     : (i == best_ret && have_ret) ? "  <-- best retard"
+                                                    : "";
 
     memset(bar, ' ', sizeof(bar) - 1u); bar[sizeof(bar) - 1u] = '\0';
     bar[15] = '|';
@@ -508,31 +559,45 @@ static void pts_finish(void)
 
     printf("%10ld %12lld %9lld %9lld   [%s]%s\r\n",
            (long)pts_us[i], (long long)pts_ns[i],
-           (long long)pts_sd[i], (long long)pts_ppb[i], bar,
-           (i == best && bestgood > 0) ? "  <-- best" : "");
+           (long long)pts_sd[i], (long long)pts_ppb[i], bar, tag);
   }
 
   printf("placement restored to %ld us.\r\n", (long)pts_restore);
 
-  if (bestgood <= 0)
-    printf("nothing in this range worked in the intended direction - every\r\n"
-           "placement %s the clock.  the pulse is on the wrong side of the\r\n"
-           "bob's turning point; sweep the other one instead\r\n",
-           pts_retard ? "advanced" : "retarded");
+  if (have_adv && -bestneg >= 2 * pts_sd[best_adv])
+    printf("best advance: %ld us -> %lld +/- %lld ns/pulse\r\n",
+           (long)pts_us[best_adv], (long long)bestneg, (long long)pts_sd[best_adv]);
+  else if (have_adv)
+    printf("best advance (%ld us, %lld ns/pulse) is inside its own error bar -\r\n"
+           "repeat with more swings before trusting it\r\n",
+           (long)pts_us[best_adv], (long long)bestneg);
   else
+    printf("no advance authority (negative kick) anywhere in this range\r\n");
+
+  if (have_ret && bestpos >= 2 * pts_sd[best_ret])
+    printf("best retard:  %ld us -> %lld +/- %lld ns/pulse\r\n",
+           (long)pts_us[best_ret], (long long)bestpos, (long long)pts_sd[best_ret]);
+  else if (have_ret)
+    printf("best retard  (%ld us, %lld ns/pulse) is inside its own error bar -\r\n"
+           "repeat with more swings before trusting it\r\n",
+           (long)pts_us[best_ret], (long long)bestpos);
+  else
+    printf("no retard authority (positive kick) anywhere in this range\r\n");
+
   {
-    if (bestgood < 2 * pts_sd[best])
-      printf("the best of them is inside its own error bar; repeat with more\r\n"
-             "swings per point before trusting the ranking\r\n");
-    printf("'PTIME %ld %ld' then SAVE to keep the best\r\n",
-           (long)(pts_retard ? cfg.pulse_advance_us : pts_place(best)),
-           (long)(pts_retard ? pts_place(best) : cfg.pulse_retard_us));
+    int32_t adv_place = have_adv ? pts_place(best_adv) : cfg.pulse_advance_us;
+    int32_t ret_place = have_ret ? pts_place(best_ret) : cfg.pulse_retard_us;
+    printf("'PTIME %ld %ld' then SAVE to keep %s\r\n", (long)adv_place, (long)ret_place,
+           (have_adv && have_ret) ? "both"
+           : have_adv ? "the advance placement (retard left as-is)"
+           : have_ret ? "the retard placement (advance left as-is)"
+                      : "the current placement - nothing significant found");
   }
+
   printf("rate ppb is what the pulsing did to the pendulum's RATE - the\r\n"
          "amplitude side of the trade, in quadrature with the kick.  its own\r\n"
-         "error is about %lld ppb here, and falls only as swings^1.5, so read\r\n"
-         "it as a hint about which placement is gentler, not as a number\r\n",
-         (long long)pts_ppbsd[best]);
+         "error falls only as swings^1.5, so read it as a hint about which\r\n"
+         "placement is gentler, not as a number to trust on its own\r\n");
 }
 
 bool control_ptime_scan(bool retard, int32_t lo, int32_t hi,
@@ -715,15 +780,84 @@ static bool fire_for(const sense_event *ev, bool retard)
   return drive_pulse_at(when, cfg.pulse_us);
 }
 
+/* KICK mode: a one-directional hysteresis scheme that needs no measured
+   authority at all - the alternative to spending credit_ns against a
+   MEASURE'd price.  It fires no more often than every kick_min_swings
+   events, and only while the phase error sits on the side of zero this
+   direction is meant to correct; once ev->demod_ns crosses back to the
+   other side it goes idle and waits for the error to return before
+   resuming, so a single direction cannot overshoot and then fight itself
+   back the other way - it just stops and waits.
+
+   ev->demod_ns follows the same sign convention as credit_ns above:
+   positive means the hands are ahead (fast) and want retarding, negative
+   means they are behind (slow) and want advancing. */
+static void kick_step(const sense_event *ev)
+{
+  uint32_t need = cfg.kick_min_swings ? cfg.kick_min_swings : 5u;
+
+  if (kick_since < 0xffffffffu) kick_since++;
+
+  if (cfg.kick_retard)
+  {
+    /* retard mode: active while the hands are ahead of true time */
+    if (kick_active) { if (ev->demod_ns <= 0) kick_active = false; }
+    else              { if (ev->demod_ns >  0) kick_active = true;  }
+    if (actuator_on && kick_active && kick_since >= need && fire_for(ev, true))
+      { kick_since = 0; disc_pulses++; }
+  }
+  else
+  {
+    /* advance mode: active while the hands are behind true time */
+    if (kick_active) { if (ev->demod_ns >= 0) kick_active = false; }
+    else              { if (ev->demod_ns <  0) kick_active = true;  }
+    if (actuator_on && kick_active && kick_since >= need && fire_for(ev, false))
+      { kick_since = 0; disc_pulses++; }
+  }
+}
+
 static void track_event(const sense_event *ev)
 {
-  int64_t d, k, err;
+  int64_t nom = (int64_t)event_ns_nominal();
+  int64_t kp  = (int64_t)(cfg.rate_kp_events ? cfg.rate_kp_events : 350u);
+  int64_t ki  = 2ll * kp * kp;
+  int64_t rerr, k;
 
-  d = (int64_t)ev->utc_ns - (int64_t)exp_ns;
+  /* Should not happen in practice - acquire_event() always seeds the rate
+     NCO before handing off to CTRL_TRACK - but a defensive fallback costs
+     nothing: seed it here instead of computing a slip check against a
+     reference that was never anchored to anything. */
+  if (!rate_have)
   {
-    int64_t iv = (int64_t)event_ns_nominal();
-    k = (d >= 0) ? ((d + iv / 2) / iv) : ((d - iv / 2) / iv);
+    rate_ns = ev->utc_ns; rate_acc = 0; rate_q = 0; rate_n = 0;
+    rate_have = true;
+    events++;
+    return;
   }
+
+  /* --- the tracking NCO ------------------------------------------------
+     Type 2: advance the prediction by one interval (plus whatever rate has
+     already been learned), then see how far off it landed.  That residual,
+     rerr, is now the loss-of-lock signal too - it is already continuously
+     disciplined against the pendulum's real rate, so it staying near zero
+     is the normal case and a value near a whole extra interval away is a
+     genuine anomaly.  This replaces a separate, undisciplined accumulator
+     (exp_ns) that only ever advanced at the fixed NOMINAL rate with no
+     correction reaching it at all - so it drifted from utc_ns by design,
+     at whatever rate the real pendulum differs from nominal, forever,
+     until it crossed the slip threshold on its own and forced a "random"
+     reacquire with no actual disturbance behind it. */
+  rate_acc += rate_q;
+  rate_ns  += (uint64_t)(nom + rate_acc / RATE_SCALE);
+  rate_acc -= (rate_acc / RATE_SCALE) * RATE_SCALE;
+
+  rerr = (int64_t)ev->utc_ns - (int64_t)rate_ns;
+  k    = (rerr >= 0) ? ((rerr + nom / 2) / nom) : ((rerr - nom / 2) / nom);
+
+  if (ev_echo)
+    printf("  utc %llu  rate_ns %llu  rerr %lld ns  k %lld\r\n",
+           (unsigned long long)ev->utc_ns, (unsigned long long)rate_ns,
+           (long long)rerr, (long long)k);
 
   if (k > MAX_SLIP_EVENTS || k < 0)
   {
@@ -731,58 +865,40 @@ static void track_event(const sense_event *ev)
        than half an interval from where we thought we were.  Either way
        this is not the event we indexed, and the schedule only moves
        forward. */
-    st = CTRL_HOLD;
+    char why[40];
+    snprintf(why, sizeof why, "schedule slip, k=%lld", (long long)k);
+    enter_hold(why);
     return;
   }
-  if (k > 0) { exp_advance(k); missed += (uint32_t)k; }
 
-  err = (int64_t)ev->utc_ns - (int64_t)exp_ns - target_off;
-  last_err = err;
-  filt_err += (err - filt_err) / 8;
-  events++;
-  exp_advance(1);
-
-  /* --- the tracking NCO ------------------------------------------------
-     Type 2: a proportional pull on the phase and an integral on the rate.
-     kp is the phase time constant in events, and ki = 2*kp*kp puts the
-     damping near 0.7, so the rate settles in roughly 2*kp events without
-     ringing. */
+  if (k > 0)
   {
-    int64_t nom = (int64_t)event_ns_nominal();
-    int64_t kp  = (int64_t)(cfg.rate_kp_events ? cfg.rate_kp_events : 350u);
-    int64_t ki  = 2ll * kp * kp;
-    int64_t rerr;
-
-    if (!rate_have)
-    {
-      rate_ns = ev->utc_ns; rate_acc = 0; rate_q = 0; rate_n = 0;
-      rate_have = true;
-    }
-    else
-    {
-      /* advance, then measure how far off the prediction landed */
-      rate_acc += rate_q;
-      rate_ns  += (uint64_t)(nom + rate_acc / RATE_SCALE);
-      rate_acc -= (rate_acc / RATE_SCALE) * RATE_SCALE;
-
-      rerr = (int64_t)ev->utc_ns - (int64_t)rate_ns;
-      meas_resid = rerr;
-
-      /* Through a measurement the NCO is the instrument, not the subject.
-         Neither correction is applied, so it free-runs on the rate it had
-         already learned and the pulses cannot pull it; meas_resid is then
-         the phase the pulses put in, with the pendulum's own rate gone. */
-      if (st != CTRL_MEASURE)
-      {
-        rate_ns = (uint64_t)((int64_t)rate_ns + rerr / kp); /* phase pull  */
-        rate_q += (rerr * RATE_SCALE) / ki;                 /* rate learn  */
-        if (rate_n < 0xffffffffu) rate_n++;
-      }
-    }
-
-    /* The learned offset, as parts per billion of the nominal interval. */
-    drift_ppb = (rate_q * 1000000000ll) / (RATE_SCALE * nom);
+    /* k swings were silently missed - fold their worth of nominal
+       intervals into the prediction so the residual below is relative to
+       THIS event, not still carrying the gap. */
+    rate_ns += (uint64_t)(k * nom);
+    rerr    -= k * nom;
+    missed  += (uint32_t)k;
   }
+
+  meas_resid = rerr;
+  last_err   = rerr;
+  filt_err  += (rerr - filt_err) / 8;
+  events++;
+
+  /* Through a measurement the NCO is the instrument, not the subject.
+     Neither correction is applied, so it free-runs on the rate it had
+     already learned and the pulses cannot pull it; meas_resid is then
+     the phase the pulses put in, with the pendulum's own rate gone. */
+  if (st != CTRL_MEASURE)
+  {
+    rate_ns = (uint64_t)((int64_t)rate_ns + rerr / kp); /* phase pull  */
+    rate_q += (rerr * RATE_SCALE) / ki;                 /* rate learn  */
+    if (rate_n < 0xffffffffu) rate_n++;
+  }
+
+  /* The learned offset, as parts per billion of the nominal interval. */
+  drift_ppb = (rate_q * 1000000000ll) / (RATE_SCALE * nom);
 
   if (pts_on && pts_settle > 0u && st == CTRL_TRACK)
   {
@@ -823,7 +939,23 @@ static void track_event(const sense_event *ev)
     return;
   }
 
-  /* --- spend the phase error in whole pulses ---------------------------
+  /* --- turn the phase error into pulses -------------------------------
+     Two independent algorithms live here, selected by cfg.control_mode.
+     cmd_ns is a live phase-error readout for STATUS either way; it is not
+     itself a controller output any more (see the KICK mode comment). */
+  cmd_ns = ev->demod_ns;
+
+  if (cfg.control_mode == 1u)
+  {
+    /* KICK: see kick_step() above.  credit_ns is the AUTH-mode
+       accumulator and has no meaning here; hold it at zero so STATUS
+       does not show a stale or misleading number. */
+    credit_ns = 0;
+    if (cfg.control_enabled) kick_step(ev);
+    return;
+  }
+
+  /* --- AUTH: spend the phase error in whole pulses ---------------------
      credit_ns used to accumulate a PI-plus-feedforward loop's OUTPUT
      (a gained, rate-compensated command built from err/rate_q).  It now
      accumulates the phase error ITSELF, straight from ev->demod_ns - the
@@ -832,7 +964,6 @@ static void track_event(const sense_event *ev)
      accumulate-and-correct, no proportional term, no separate rate
      estimate.  kp_swings/ki_swings/slew_limit_ppm are no longer read
      anywhere; they are harmless to leave set, just without effect. */
-  cmd_ns = ev->demod_ns;      /* kept only so STATUS still shows a live number */
   credit_ns += ev->demod_ns;
 
   /* Positive credit means the hands are ahead and want retarding.  Each
@@ -843,14 +974,14 @@ static void track_event(const sense_event *ev)
     int64_t ar = (int64_t)cfg.auth_retard_ns;
     int64_t aa = (int64_t)cfg.auth_advance_ns;
 
-    if (cfg.control_enabled)
+    if (cfg.control_enabled && actuator_on)
     {
       /* Only spend the credit if the pulse actually fired - a refusal here
          used to still deduct the price, so the loop believed it had paid
          for a correction the pendulum never received and quietly fell
          behind by however much that pulse was worth. */
-      if      (ar > 0 && credit_ns >= ar  && fire_for(ev, true))  credit_ns -= ar;
-      else if (aa > 0 && credit_ns <= -aa && fire_for(ev, false)) credit_ns += aa;
+      if      (ar > 0 && credit_ns >= ar  && fire_for(ev, true))  { credit_ns -= ar; disc_pulses++; }
+      else if (aa > 0 && credit_ns <= -aa && fire_for(ev, false)) { credit_ns += aa; disc_pulses++; }
     }
 
     /* This clamp has to run whether or not control is enabled, and whether
@@ -895,18 +1026,29 @@ static void acquire_event(const sense_event *ev)
 
   if (acq_run >= need)
   {
-    /* Anchor the schedule on this event, so the loop starts at zero error
-       and only has to hold it there. */
-    exp_ns   = ev->utc_ns;
-    exp_frac = 0;
-    events   = 0;
-    missed   = 0;
-    integ    = 0;
-    cmd_ns   = 0;
+    /* Anchor the rate NCO on this event, so the loop starts at zero error
+       and only has to hold it there - rate_ns is what the slip check
+       measures against now, so this is the reset that matters; without
+       it the first event after a reacquire would compare against
+       whatever rate_ns was frozen at when tracking last stopped, which
+       free-runs every event track_event() is not called, not just the
+       ones spent in CTRL_HOLD, and would report a huge, spurious slip on
+       the very next event. */
+    rate_ns   = ev->utc_ns;
+    rate_have = true;
+    rate_acc  = 0;
+    rate_q    = 0;
+    rate_n    = 0;
+    events    = 0;
+    missed    = 0;
+    integ     = 0;
+    cmd_ns    = 0;
     credit_ns = 0;
-    last_err = 0;
-    filt_err = 0;
-    exp_advance(1);
+    last_err  = 0;
+    filt_err  = 0;
+    drift_ppb = 0;
+    kick_active = false;
+    kick_since  = 0;
     st = CTRL_TRACK;
   }
 }
@@ -935,7 +1077,7 @@ void control_poll(void)
 
     if (!tb_have_time() || ev.utc_ns == 0ull)
     {
-      if (st != CTRL_HOLD) { st = CTRL_HOLD; }
+      if (st != CTRL_HOLD) enter_hold("no UTC time on this event");
       continue;
     }
 
@@ -951,8 +1093,26 @@ void control_poll(void)
     uint64_t quiet = time_us_64() - sense_last_event_us();
     if (quiet > (event_ns_nominal() / 1000ull) * 5ull)
     {
-      st = CTRL_HOLD;
-      drive_all_off();
+      char why[40];
+      snprintf(why, sizeof why, "no event for %llu us", (unsigned long long)quiet);
+      enter_hold(why);
+    }
+  }
+
+  if (phaselog_secs > 0u)
+  {
+    uint64_t now = time_us_64();
+    if (phaselog_last_us == 0ull) phaselog_last_us = now;
+    else if (now - phaselog_last_us >= (uint64_t)phaselog_secs * 1000000ull)
+    {
+      uint32_t fired = disc_pulses - phaselog_last_pulses;
+      printf("phaselog: %s  err %lld us  filt %lld us  %lu pulses in the"
+             " last %lu s (%lu total)\r\n",
+             control_state_name(st), (long long)(last_err / 1000),
+             (long long)(filt_err / 1000), (unsigned long)fired,
+             (unsigned long)phaselog_secs, (unsigned long)disc_pulses);
+      phaselog_last_pulses = disc_pulses;
+      phaselog_last_us = now;
     }
   }
 }
@@ -974,4 +1134,6 @@ void control_stats_get(control_stats *o)
   o->pulses           = drive_pulse_count();
   o->missed           = missed;
   o->target_offset_ns = target_off;
+  o->kick_active       = kick_active ? 1u : 0u;
+  o->kick_since        = kick_since;
 }

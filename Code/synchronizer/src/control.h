@@ -89,6 +89,9 @@ typedef struct _control_stats
   uint32_t pulses;
   uint32_t missed;            /* events the detector did not report      */
   int64_t  target_offset_ns;  /* deliberate offset of the hands          */
+  uint8_t  kick_active;       /* KICK mode: currently in the correcting
+                                  phase, vs idle waiting to cross back    */
+  uint32_t kick_since;        /* KICK mode: swings since the last pulse  */
 } control_stats;
 
 void control_init(void);
@@ -110,12 +113,15 @@ control_state control_blind(void);
    everything else, so a large offset slews rather than jumps. */
 void control_set_offset_ns(int64_t offset_ns);
 
-/* Zero the pending correction credit (and the PI integrator that feeds it).
-   Call whenever AUTH changes: the old backlog was priced under the old
+/* Zero the pending correction credit (and the PI integrator that feeds it),
+   and KICK mode's active/idle latch and since-last-kick counter.  Call
+   whenever AUTH changes: the old backlog was priced under the old
    authority - possibly no authority at all, in which case it should never
    have been allowed to grow in the first place - and spending it under the
    new price would dump however many pulses it takes to burn it off onto
-   the actuator all at once. */
+   the actuator all at once.  Also call it whenever LOOPMODE or KICK's own
+   parameters change, for the same reason: state built up under the old
+   settings should not carry over into the new ones. */
 void control_clear_credit(void);
 
 /* Fire one pulse per event for n events and report the phase step, which
@@ -142,6 +148,23 @@ const char *control_state_name(control_state s);
    consumed here, so this is the only place they can be watched from. */
 void control_set_echo(bool on);
 bool control_echo(void);
+
+/* A periodic one-line summary instead of WATCH's per-event flood: phase
+   error and how many corrective pulses (AUTH spends or KICK kicks,
+   whichever mode is running) fired since the previous line, once every
+   `secs` seconds.  0 turns it off. */
+void control_set_phaselog(uint32_t secs);
+uint32_t control_phaselog(void);
+
+/* CONTROL Y/N is the master switch - N idles the whole loop, including the
+   phase/rate tracking.  This is a narrower one: it mutes only the actual
+   corrective pulse (AUTH's spend or KICK's kick), leaving tracking,
+   credit_ns/kick_active/kick_since bookkeeping, and PHASELOG's numbers
+   running exactly as if it were on.  Not saved to flash - defaults to on
+   at every boot, same as CONTROL defaults to off; the two are independent
+   and this one only does anything while CONTROL is on. */
+void control_set_actuator(bool on);
+bool control_actuator(void);
 
 #ifdef __cplusplus
 }

@@ -47,6 +47,7 @@ static bool     have_time;
 static uint32_t fixes;
 static int64_t  last_offset;
 static uint64_t last_fix_us;
+static bool     last_was_step;
 
 void tb_init(int32_t seed_ppb)
 {
@@ -57,6 +58,7 @@ void tb_init(int32_t seed_ppb)
   fixes       = 0;
   last_offset = 0;
   last_fix_us = 0;
+  last_was_step = false;
 }
 
 /* Project the model forward from its base to an arbitrary timer reading. */
@@ -82,6 +84,7 @@ int32_t tb_ppb(void) { return ppb; }
 int64_t tb_last_offset_ns(void) { return last_offset; }
 uint32_t tb_fix_count(void) { return fixes; }
 uint64_t tb_last_fix_us(void) { return last_fix_us; }
+bool     tb_last_was_step(void) { return last_was_step; }
 
 /* A type-2 loop, the same shape as control.c's pendulum tracking NCO: one
    error signal (offset - actual UTC from the server minus what the model
@@ -108,6 +111,7 @@ bool tb_apply_fix(uint64_t local_us, uint64_t server_utc_ns, uint32_t rtt_us)
     fixes       = 1;
     last_offset = 0;
     last_fix_us = local_us;
+    last_was_step = true;
     return true;
   }
 
@@ -124,6 +128,7 @@ bool tb_apply_fix(uint64_t local_us, uint64_t server_utc_ns, uint32_t rtt_us)
        than let a single huge outlier corrupt the rate loop. */
     base_us     = local_us;
     base_utc_ns = server_utc_ns;
+    last_was_step = true;
     return true;
   }
 
@@ -147,6 +152,7 @@ bool tb_apply_fix(uint64_t local_us, uint64_t server_utc_ns, uint32_t rtt_us)
      monotonic rather than jumping. */
   base_utc_ns = project(local_us) + (uint64_t)(offset / kp);
   base_us     = local_us;
+  last_was_step = false;
 
   return true;
 }

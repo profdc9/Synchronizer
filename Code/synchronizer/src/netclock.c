@@ -138,8 +138,25 @@ static void ntp_recv(void *arg, struct udp_pcb *p, struct pbuf *buf,
          receive; the midpoint is the best estimate we have, and the round
          trip is the uncertainty on it. */
       last_rtt = (uint32_t)rtt;
-      if (tb_apply_fix(send_us + rtt / 2u, unix_ns, (uint32_t)rtt)) ok_count++;
-      else fail_count++;
+      /* Unconditional, not gated behind WATCH - a fix that lands while
+         something else stalled the main loop for a while looks like an
+         ordinary NTP reply here, just with rtt/offset larger than usual,
+         so the only way to catch one after the fact is to always have it
+         on the record. */
+      if (tb_apply_fix(send_us + rtt / 2u, unix_ns, (uint32_t)rtt))
+      {
+        ok_count++;
+        printf("ntp fix #%lu: rtt %llu us  offset %lld ns  ppb %ld%s\r\n",
+               (unsigned long)ok_count, (unsigned long long)rtt,
+               (long long)tb_last_offset_ns(), (long)tb_ppb(),
+               tb_last_was_step() ? "  STEPPED" : "");
+      }
+      else
+      {
+        fail_count++;
+        printf("ntp fix REJECTED: rtt %llu us over gate\r\n",
+               (unsigned long long)rtt);
+      }
       waiting = false;
     }
   }

@@ -34,6 +34,7 @@
 #include "hardware/watchdog.h"
 #include "httpd.h"
 #include "webui.h"
+#include "conout.h"
 
 /* Slow heartbeat on the Pico W's onboard LED: one blink per detected swing
    while events are arriving, steady off when they are not. */
@@ -68,6 +69,7 @@ static void led_task(void)
 int main(void)
 {
   stdio_init_all();
+  conout_init();
 
   if (watchdog_caused_reboot())
     printf("\r\n[boot] *** previous boot hung - watchdog reset ***\r\n");
@@ -91,6 +93,7 @@ int main(void)
   for (;;)
   {
     watchdog_update();
+    conout_poll();
     cli_poll();
     control_poll();
     net_poll();

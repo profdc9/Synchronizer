@@ -35,6 +35,7 @@ static void note_diag_cost(void);
 #include "drive.h"
 #include "timebase.h"
 #include "netclock.h"
+#include "conout.h"
 #include "httpd.h"
 #include "dhcpserver.h"
 #include "dnsserver.h"
@@ -215,6 +216,9 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   printf("%-22s %lu ok, %lu failed, last rtt %lu us\r\n", "ntp",
          (unsigned long)net_ntp_ok(), (unsigned long)net_ntp_fail(),
          (unsigned long)net_last_rtt_us());
+  printf("%-22s %lu bytes dropped%s\r\n", "console",
+         (unsigned long)conout_dropped(),
+         conout_dropped() ? " - terminal fell behind, output was lost" : "");
   utc = tb_utc_ns();
   if (tb_have_time())
   {
@@ -254,6 +258,17 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("\r\n-- loop -------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "state", control_state_name(cs.state));
+  printf("%-22s %s\r\n", "mode",
+         cfg.control_mode ? "KICK - hysteresis, no measured authority"
+                           : "AUTH - spends measured pulse authority");
+  if (!control_actuator())
+    printf("%-22s muted - tracking continues, no pulses will fire\r\n", "actuator");
+  if (cfg.control_mode)
+    printf("%-22s %s, %s, %u since last kick (min %u)\r\n", "kick",
+           cfg.kick_retard ? "retard" : "advance",
+           cs.kick_active ? "active" : "idle",
+           (unsigned)cs.kick_since,
+           (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u));
   printf("%-22s %llu  (%lu missed)\r\n", "events", (unsigned long long)cs.events,
          (unsigned long)cs.missed);
   print_ns("phase error", cs.err_ns);
@@ -417,6 +432,26 @@ static int watch_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+static int phaselog_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  control_set_phaselog((uint32_t)tp[0].ti.i);
+  if (control_phaselog())
+    printf("phaselog every %lu s\r\n", (unsigned long)control_phaselog());
+  else
+    printf("phaselog off\r\n");
+  return 1;
+}
+
+static int actuator_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  control_set_actuator(tp[0].tb.b);
+  printf("actuator %s%s\r\n", control_actuator() ? "on" : "muted",
+         control_actuator() ? "" : " - tracking continues, no pulses will fire");
+  return 1;
+}
+
 static int pulse_cmd(int args, tinycl_parameter *tp, void *v)
 {
   uint32_t us = (uint32_t)tp[0].ti.i;
@@ -492,6 +527,31 @@ static int auth_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+static int loopmode_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  if      (strcmp(tp[0].ts.str, "AUTH") == 0) cfg.control_mode = 0u;
+  else if (strcmp(tp[0].ts.str, "KICK") == 0) cfg.control_mode = 1u;
+  else { printf("mode must be AUTH or KICK\r\n"); return 1; }
+  control_clear_credit();
+  printf("loop mode: %s\r\n", cfg.control_mode
+         ? "KICK - hysteresis, no measured authority needed"
+         : "AUTH - spends measured pulse authority");
+  return 1;
+}
+
+static int kick_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  cfg.kick_min_swings = (uint16_t)tp[0].ti.i;
+  cfg.kick_retard     = tp[1].tb.b ? 1u : 0u;
+  control_clear_credit();
+  printf("kick mode: %s, minimum %u swings between pulses\r\n",
+         cfg.kick_retard ? "retard" : "advance",
+         (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u));
+  return 1;
+}
+
 static int modscan_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
@@ -507,6 +567,26 @@ static int trace_cmd(int args, tinycl_parameter *tp, void *v)
   (void)args; (void)v;
   sense_trace((uint32_t)tp[0].ti.i);
   note_diag_cost();
+  return 1;
+}
+
+static int pulsetrace_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  sense_pulse_trace((uint32_t)tp[0].ti.i, (uint32_t)tp[1].ti.i);
+  note_diag_cost();
+  return 1;
+}
+
+/* Unlike every other trace command, this never borrows the ADC and never
+   holds the loop - it just arms a trigger inside the real detector and
+   waits, so note_diag_cost() (which reports on a diagnostic having just
+   interrupted tracking) does not apply here. */
+static int chattertrace_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)tp; (void)v;
+  if (!sense_chatter_ready()) sense_chatter_arm();
+  sense_chatter_dump();
   return 1;
 }
 
@@ -996,6 +1076,10 @@ static const tinycl_command tcmds[] =
   { "DRIVE",    "ns - tank drive pulse width (0 = off)",   drive_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "ENV",      "ms - envelope min/mean/max over a window", env_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "TRACE",    "ms - plot the envelope against time",      trace_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "PULSETRACE","pulse_us ms - trace, firing one pulse partway through", pulsetrace_cmd,
+                {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "CHATTERTRACE","arm/dump a capture of the detector's own next chatter event",
+                chattertrace_cmd, {TINYCL_PARM_END} },
   { "MODSCAN",  "lo hi steps - find the best drive (0 0 0)", modscan_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "SENSE",    "y|n - detector",                      sense_cmd,    {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "THRESH",   "counts - detection threshold",           thresh_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
@@ -1003,12 +1087,16 @@ static const tinycl_command tcmds[] =
   { "FILTER",   "oversample trim baseline_shift",          filter_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "DIR",      "y if the bob makes amplitude fall",     dir_cmd,      {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "WATCH",    "y|n - echo every swing",              watch_cmd,    {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
+  { "PHASELOG", "seconds - periodic phase/pulses log, 0 off", phaselog_cmd, {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "ACTUATOR", "y|n - mute corrective pulses only; tracking keeps running", actuator_cmd, {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "PULSE",    "us - fire the coil once, now",           pulse_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "COILOFF",  "drop the coil and cancel pending",       coiloff_cmd,  {TINYCL_PARM_END} },
   { "COILTEST", "ms YES - hold the coil on to feel it pull; once per boot", coiltest_cmd, {TINYCL_PARM_INT, TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "PW",       "us - correction pulse width",            pw_cmd,       {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "PTIME",    "advance_us retard_us - pulse placing",   ptime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "AUTH",     "advance_ns retard_ns - step one pulse buys", auth_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "LOOPMODE", "AUTH|KICK - which algorithm CONTROL uses", loopmode_cmd, {TINYCL_PARM_STR, TINYCL_PARM_END} },
+  { "KICK",     "min_swings retard(y|n) - hysteresis mode params", kick_cmd, {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "MEASURE",  "pulses retard(y|n) - authority, takes 3x that many swings", measure_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "PTIMESCAN","retard(y|n) lo hi steps swings - sweep placement", ptimescan_cmd,
                 {TINYCL_PARM_BOOL, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },

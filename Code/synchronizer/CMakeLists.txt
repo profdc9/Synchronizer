@@ -26,6 +26,7 @@ add_compile_options(
 
 add_executable(synchronizer
     src/main.c
+    src/conout.c
     src/config.c
     src/timebase.c
     src/sense.c

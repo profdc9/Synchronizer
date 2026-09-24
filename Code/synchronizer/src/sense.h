@@ -203,6 +203,30 @@ void sense_envelope(uint32_t ms, sense_env_stats *out);
    time.  Those are the three things the detector's windows depend on. */
 void sense_trace(uint32_t ms);
 
+/* Same plot as sense_trace(), but fires one drive pulse a quarter of the
+   way through the window instead of leaving the coil alone - the direct
+   way to see what a pulse actually does to the sense side, rather than
+   inferring it after the fact from a lost lock or an implausible ppb
+   figure.  A real mechanical disturbance shows up as an ordinary-looking
+   envelope excursion, just a large or sudden one; an electrical one -
+   supply sag, ground bounce, coupling straight into the tank coil - shows
+   up as a discontinuity the envelope's own shape cannot explain.  Both
+   look identical to a magnet that suddenly has a lot more authority from
+   every other diagnostic in this firmware, which is what this exists to
+   tell apart.  pulse_us 0 uses cfg.pulse_us, same as PULSE. */
+void sense_pulse_trace(uint32_t pulse_us, uint32_t ms);
+
+/* A scope-trigger for a real chatter event, not a separate capture that has
+   to get lucky enough to overlap one - most swings don't chatter, so a
+   clean TRACE proves nothing about the ones that do.  sense_chatter_arm()
+   marks the next real chatter++ (from ordinary tracking, no ADC borrowed,
+   no hold) to freeze a small rolling window of the detector's own actual
+   samples; sense_chatter_ready() says whether that has happened yet;
+   sense_chatter_dump() prints the frozen window and re-arms. */
+void sense_chatter_arm(void);
+bool sense_chatter_ready(void);
+void sense_chatter_dump(void);
+
 /* Find the drive frequency where the bob moves the envelope most, and say
    how much.  RESONANCE finds the tank's peak with nothing near the coil,
    but that is not where the detector wants to sit: the bob's eddy loading

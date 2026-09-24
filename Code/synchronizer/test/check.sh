@@ -24,7 +24,7 @@ say "a pulse that does the opposite of what was asked"
 
 say "PTIMESCAN: the largest magnitude is on the WRONG side of zero"
 say "  (ranking by magnitude picks 60000 us; ranking by sign picks 35000)"
-SWEEP=1 ./authority 0 0 300000 40 5 | sed -n '/placement sweep/,/SAVE/p'
+SWEEP=1 ./authority 0 0 300000 40 5 | sed -n '/placement sweep/,/PTIME/p'
 
-say "PTIMESCAN: no placement in range works - must say so, not pick one"
-SWEEP=1 WRONGSIDE=1 ./authority 0 0 300000 40 5 | sed -n '/placement sweep/,/instead/p'
+say "PTIMESCAN: the whole range is advance - must report that, not force a retard"
+SWEEP=1 WRONGSIDE=1 ./authority 0 0 300000 40 5 | sed -n '/placement sweep/,/PTIME/p'
