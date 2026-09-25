@@ -213,7 +213,8 @@ void sense_trace(uint32_t ms);
    up as a discontinuity the envelope's own shape cannot explain.  Both
    look identical to a magnet that suddenly has a lot more authority from
    every other diagnostic in this firmware, which is what this exists to
-   tell apart.  pulse_us 0 uses cfg.pulse_us, same as PULSE. */
+   tell apart.  pulse_us 0 is refused, same as PULSE - there is no
+   default width any more, only what is asked for. */
 void sense_pulse_trace(uint32_t pulse_us, uint32_t ms);
 
 /* A scope-trigger for a real chatter event, not a separate capture that has

@@ -97,7 +97,7 @@ static void base_config(void)
   cfg.beats_per_hour = 8400; cfg.beats_per_period = 2; cfg.events_per_period = 1;
   cfg.drive_offset_ppt = 500; cfg.rate_kp_events = 120; cfg.acquire_events = 12;
   cfg.acquire_tol_pct = 4; cfg.kp_swings = 4200; cfg.ki_swings = 12600;
-  cfg.slew_limit_ppm = 500; cfg.pulse_us = 2000;
+  cfg.slew_limit_ppm = 500;
   cfg.pulse_advance_us = 40000; cfg.pulse_retard_us = 40000;
   cfg.pulse_advance_width_us = 2000; cfg.pulse_retard_width_us = 2000;
   cfg.kick_min_swings = 5; cfg.kick_threshold_pct = 5;

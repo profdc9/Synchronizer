@@ -190,16 +190,18 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("\r\n-- drive ------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "coil", drive_is_on() ? "ON" : "off");
-  printf("%-22s %ld us advance, %ld us retard\r\n", "pulse placement",
-         (long)cfg.pulse_advance_us, (long)cfg.pulse_retard_us);
   if (cfg.pulse_advance_width_us)
-    printf("%-22s %u us\r\n", "pulse width, advance", cfg.pulse_advance_width_us);
+    printf("%-22s width %u us, offset %ld us\r\n", "advance",
+           cfg.pulse_advance_width_us, (long)cfg.pulse_advance_us);
   else
-    printf("%-22s disabled (width 0)\r\n", "pulse width, advance");
+    printf("%-22s disabled (width 0), offset %ld us\r\n", "advance",
+           (long)cfg.pulse_advance_us);
   if (cfg.pulse_retard_width_us)
-    printf("%-22s %u us\r\n", "pulse width, retard", cfg.pulse_retard_width_us);
+    printf("%-22s width %u us, offset %ld us\r\n", "retard",
+           cfg.pulse_retard_width_us, (long)cfg.pulse_retard_us);
   else
-    printf("%-22s disabled (width 0)\r\n", "pulse width, retard");
+    printf("%-22s disabled (width 0), offset %ld us\r\n", "retard",
+           (long)cfg.pulse_retard_us);
   printf("%-22s %lu fired, %lu refused, %lu us budget\r\n", "pulses",
          (unsigned long)drive_pulse_count(), (unsigned long)drive_refused_count(),
          (unsigned long)drive_budget_us());
@@ -468,8 +470,7 @@ static int pulse_cmd(int args, tinycl_parameter *tp, void *v)
 {
   uint32_t us = (uint32_t)tp[0].ti.i;
   (void)args; (void)v;
-  if (us == 0u) us = cfg.pulse_us;
-  printf("%s\r\n", drive_pulse(us) ? "fired" : "REFUSED (too wide, or duty budget spent)");
+  printf("%s\r\n", drive_pulse(us) ? "fired" : "REFUSED (0, too wide, or duty budget spent)");
   return 1;
 }
 

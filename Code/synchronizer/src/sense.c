@@ -871,7 +871,6 @@ void sense_pulse_trace(uint32_t pulse_us, uint32_t ms)
 
   if (ms == 0u)        ms = 2000u;
   if (ms > 3000u)       ms = 3000u;     /* stay well inside the watchdog */
-  if (pulse_us == 0u)  pulse_us = cfg.pulse_us;
   per_us = (ms * 1000u) / n;
 
   /* sense_diag_begin() blinds the detector and, if the loop was tracking,

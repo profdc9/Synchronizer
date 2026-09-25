@@ -174,10 +174,10 @@ static uint32_t json_status(char *b, uint32_t n)
     cfg.acquire_events, cfg.acquire_tol_pct);
 
   u += (uint32_t)snprintf(b + u, n - u,
-    "\"drive\":{\"on\":%d,\"pw\":%u,\"adv\":%ld,\"ret\":%ld,"
+    "\"drive\":{\"on\":%d,\"adv\":%ld,\"ret\":%ld,"
       "\"advw\":%u,\"retw\":%u,"
       "\"pulses\":%lu,\"refused\":%lu,\"budget\":%lu},",
-    drive_is_on() ? 1 : 0, cfg.pulse_us, (long)cfg.pulse_advance_us,
+    drive_is_on() ? 1 : 0, (long)cfg.pulse_advance_us,
     (long)cfg.pulse_retard_us,
     cfg.pulse_advance_width_us, cfg.pulse_retard_width_us,
     (unsigned long)drive_pulse_count(), (unsigned long)drive_refused_count(),
@@ -333,7 +333,6 @@ static bool apply_config(const char *q)
   if (set_u32(q, "tank",   &t, 100u, 500000u)) { sense_set_tank_hz(t);           touched = true; }
   if (set_u32(q, "thresh", &t, 1u, 4000u))     { cfg.detect_threshold = (uint16_t)t; touched = true; }
   if (set_u32(q, "falling",&t, 0u, 1u))        { cfg.detect_falling = (uint8_t)t;    touched = true; }
-  if (set_u32(q, "pw",     &t, 0u, DRIVE_MAX_PULSE_US)) { cfg.pulse_us = t;                touched = true; }
   if (set_i32(q, "adv",    &ti, -half, half))  { cfg.pulse_advance_us = ti; touched = true; }
   if (set_i32(q, "ret",    &ti, -half, half))  { cfg.pulse_retard_us  = ti; touched = true; }
   /* 0 deliberately disables that direction's corrections - see the
@@ -573,7 +572,7 @@ void http_dispatch(const char *method, const char *path, const char *query,
     { cfg.sense_enabled = http_query_int(query, "on", 1) ? 1u : 0u;
       sense_enable(cfg.sense_enabled != 0u); }
     else if (strcmp(act, "pulse") == 0)
-      drive_pulse((uint32_t)http_query_int(query, "us", cfg.pulse_us));
+      drive_pulse((uint32_t)http_query_int(query, "us", 0));
     else if (strcmp(act, "coiloff") == 0)
       drive_all_off();
     else if (strcmp(act, "offset") == 0)

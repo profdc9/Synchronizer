@@ -170,7 +170,6 @@ void config_defaults(void)
   /* Deliberately timid.  The coil current runs through R6 (10R) and the
      coil resistance is unknown until it is measured, so the first pulses
      should be short.  Widen it once you know what the coil draws. */
-  cfg.pulse_us           = 2000u;
   cfg.pulse_advance_us   = 40000u;
   cfg.pulse_retard_us    = 40000u;
   cfg.pulse_advance_width_us = 2000u;

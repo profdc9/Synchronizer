@@ -133,9 +133,12 @@ typedef struct _synchronizer_config
   uint16_t tank_floor_adc;      /* envelope reading far off resonance    */
 
   /* --- drive ------------------------------------------------------ */
-  uint32_t pulse_us;            /* width for manual PULSE/PULSETRACE, and
-                                    the fallback below if a directional
-                                    width is ever left at 0              */
+  uint32_t pad_pulse_us;        /* was pulse_us: a stored default width for
+                                    manual PULSE/PULSETRACE.  Removed -
+                                    both now always take an explicit width
+                                    and refuse 0 rather than falling back
+                                    to anything - unused, left in place
+                                    rather than reshuffling the layout    */
   /* Both placements are offsets from the SAME centre - drive_offset_ppt's
      instant, halfway between sense events for this clock's opposite-
      extreme coils - not two independently-anchored windows.  Signed and

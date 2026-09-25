@@ -157,20 +157,23 @@ leave it at 0 unless you want to correct for your own reaction.</div>
 <tr><td class="k">pulses</td><td class="v"><span id="dp">-</span></td></tr>
 <tr><td class="k">duty budget</td><td class="v"><span id="dbud">-</span> us</td></tr>
 </table>
-<div class="row"><label>width us</label><input id="pw">
-<label style="min-width:34px">adv</label><input id="adv" style="width:62px">
-<label style="min-width:34px">ret</label><input id="ret" style="width:62px">
-<button onclick="cfg('pw,adv,ret')">Apply</button></div>
-<div class="row"><button onclick="act('pulse&us='+v('pw'))">Test pulse</button>
+<div class="row"><label>advance</label>
+<label style="min-width:40px">width</label><input id="advw" style="width:62px">
+<label style="min-width:40px">offset</label><input id="adv" style="width:62px">
+<button onclick="cfg('advw,adv')">Apply</button></div>
+<div class="row"><label>retard</label>
+<label style="min-width:40px">width</label><input id="retw" style="width:62px">
+<label style="min-width:40px">offset</label><input id="ret" style="width:62px">
+<button onclick="cfg('retw,ret')">Apply</button></div>
+<div class="row"><label>width us</label><input id="pw" value="2000">
+<button onclick="act('pulse&us='+v('pw'))">Test pulse</button>
 <button onclick="act('coiloff')">Coil off</button></div>
-<div class="row"><label>corr width</label><input id="advw" style="width:62px">
-<label style="min-width:34px">ret</label><input id="retw" style="width:62px">
-<button onclick="cfg('advw,retw')">Apply</button></div>
-<div class="note">Correction width, used only by KICK's own pulses &mdash; separate from
-the manual test-pulse width above, since the two placements are not equal: an attract-only
-coil retards far more strongly than it advances, so each direction usually wants its own
-width. 0 disables that direction's corrections entirely. Use <code>FORCEERR</code> on the
-console to trigger KICK on demand and watch which way a placement actually moves the clock.</div>
+<div class="note">Width and offset (placement from the drive coil's centre) per direction,
+used by KICK's own pulses &mdash; an attract-only coil retards far more strongly than it
+advances, so each side usually wants its own width. 0 disables that direction's corrections
+entirely. The test pulse above is a manual one-off with its own width, unrelated to either.
+Use <code>FORCEERR</code> on the console to trigger KICK on demand and watch which way a
+placement actually moves the clock.</div>
 </section>
 
 <section><h2>Time</h2>
@@ -575,7 +578,7 @@ function poll(){var mySeq=++pollSeq;
  de.className='pill '+(D.on?'bad':'off');
  t('dp',num(D.pulses)+(D.refused?' ('+D.refused+' refused)':''));
  t('dbud',num(D.budget));
- fld('pw',D.pw);fld('adv',D.adv);fld('ret',D.ret);
+ fld('adv',D.adv);fld('ret',D.ret);
  fld('advw',D.advw);fld('retw',D.retw);
 
  var C2=d.chime;
