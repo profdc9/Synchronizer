@@ -82,14 +82,6 @@ reloading. <button onclick="location.reload(true)">Reload</button></div>
 <div class="note">A positive offset holds the hands <em>back</em> &mdash; use it when the clock is running ahead. The loop slews there at the rate limit; it never jumps.</div>
 </section>
 
-<section class="wide"><h2>Uncorrected Error</h2>
-<canvas id="ecv" width="1100" height="130"></canvas>
-<div class="note"><span id="etip">hover the graph to inspect a swing</span>
-&nbsp;&mdash;&nbsp;<span style="color:var(--acc)">&#9644;</span> uncorrected error
-&nbsp;<span style="color:var(--ok)">&#9679;</span> advance pulse
-&nbsp;<span style="color:var(--warn)">&#9679;</span> retard pulse</div>
-</section>
-
 <section><h2>Clock</h2>
 <table>
 <tr><td class="k">swing period</td><td class="v"><span id="cper">-</span></td></tr>
@@ -201,6 +193,21 @@ console to trigger KICK on demand and watch which way a placement actually moves
 <div class="note">Credentials are only accepted over the device's own setup network, never from here. Use <code>WIFI ssid pass</code> on the serial console, or raise the setup access point.</div>
 </section>
 
+<section class="wide"><h2>Uncorrected Error</h2>
+<canvas id="ecv" width="1100" height="130"></canvas>
+<div class="note"><span id="etip">hover the graph to inspect a swing</span>
+&nbsp;&mdash;&nbsp;<span style="color:var(--acc)">&#9644;</span> uncorrected error
+&nbsp;<span style="color:var(--ok)">&#9679;</span> advance pulse
+&nbsp;<span style="color:var(--warn)">&#9679;</span> retard pulse</div>
+</section>
+
+<section class="wide"><h2>NTP Correction</h2>
+<canvas id="ncv" width="1100" height="130"></canvas>
+<div class="note"><span id="ntip">hover the graph to inspect a fix</span>
+&nbsp;&mdash;&nbsp;<span style="color:var(--acc)">&#9644;</span> offset per fix
+&nbsp;<span style="color:var(--warn)">&#9679;</span> stepped (large jump, not slewed)</div>
+</section>
+
 <section><h2>Configuration</h2>
 <div class="row"><label>windows %</label><input id="rearm" style="width:48px"><input id="minb" style="width:48px"><input id="maxb" style="width:48px">
 <button onclick="cfg('rearm,minb,maxb')">Apply</button></div>
@@ -247,6 +254,7 @@ var pollSeq=0;
 var hist=[],hpos=0,hdraft='';
 var logcur=-1;
 var errHist=[],errCursor=-1,errHover=-1;
+var ntpHist=[],ntpCursor=-1,ntpHover=-1;
 var WEBVER='__WEBVER__';
 function $(i){return document.getElementById(i)}
 function v(i){return $(i).value}
@@ -404,6 +412,79 @@ function drawErr(){
   errHover=-1;t('etip','hover the graph to inspect a swing');drawErr()})
 })();
 
+/* Fixes land far less often than swings (seconds to minutes apart, not
+   sub-second), so the backlog here is smaller too - but the same reasoning
+   applies: show it on page load rather than starting empty. */
+function pumpNtp(){
+ fetch('/api/ntphist?from='+(ntpCursor<0?0:ntpCursor)).then(function(r){return r.text()})
+  .then(function(t){
+   var nl=t.indexOf('\n'); if(nl<0)return;
+   var seq=parseInt(t.slice(0,nl),10), body=t.slice(nl+1);
+   ntpCursor=seq;
+   if(!body)return;
+   var lines=body.split('\n'), grew=false;
+   for(var i=0;i<lines.length;i++){
+    if(!lines[i])continue;
+    var c=lines[i].split(','), u=parseInt(c[0],10), s=parseInt(c[1],10);
+    if(isNaN(u))continue;
+    ntpHist.push({u:u,s:s}); grew=true}
+   if(ntpHist.length>500)ntpHist.splice(0,ntpHist.length-500);
+   if(grew)drawNtp()})
+  .catch(function(){})}
+
+function drawNtp(){
+ var c=$('ncv'),g=c.getContext('2d'),W=c.width,H=c.height;
+ var cs=getComputedStyle(document.documentElement);
+ var n=ntpHist.length, x0=44,x1=W-8,y0=8,y1=H-10,i;
+ g.clearRect(0,0,W,H);
+ if(!n){g.fillStyle=cs.getPropertyValue('--dim');g.font='12px sans-serif';
+  g.fillText('no fixes applied yet',10,H/2);return}
+ var mn=ntpHist[0].u,mx=ntpHist[0].u;
+ for(i=1;i<n;i++){if(ntpHist[i].u<mn)mn=ntpHist[i].u;if(ntpHist[i].u>mx)mx=ntpHist[i].u}
+ if(mn>0)mn=0; if(mx<0)mx=0;
+ var pad=(mx-mn)*0.1||1000; mn-=pad; mx+=pad;
+ var xf=function(i){return x0+(x1-x0)*(n>1?i/(n-1):1)};
+ var yf=function(u){return y1-(y1-y0)*((u-mn)/(mx-mn))};
+
+ g.strokeStyle=cs.getPropertyValue('--line');g.lineWidth=1;g.beginPath();
+ g.moveTo(x0,yf(0));g.lineTo(x1,yf(0));g.stroke();
+
+ g.strokeStyle=cs.getPropertyValue('--acc');g.lineWidth=1.5;g.beginPath();
+ for(i=0;i<n;i++){var x=xf(i),y=yf(ntpHist[i].u); i?g.lineTo(x,y):g.moveTo(x,y)}
+ g.stroke();
+
+ for(i=0;i<n;i++){
+  if(!ntpHist[i].s)continue;
+  g.fillStyle=cs.getPropertyValue('--warn');
+  g.beginPath();g.arc(xf(i),yf(ntpHist[i].u),3.5,0,Math.PI*2);g.fill()}
+
+ g.fillStyle=cs.getPropertyValue('--dim');g.font='10px ui-monospace,monospace';
+ g.fillText((mx>=0?'+':'')+num(Math.round(mx))+' us',2,y0+8);
+ g.fillText((mn>=0?'+':'')+num(Math.round(mn))+' us',2,y1);
+
+ if(ntpHover>=0&&ntpHover<n){
+  var hx=xf(ntpHover);
+  g.strokeStyle=cs.getPropertyValue('--dim');g.lineWidth=1;g.beginPath();
+  g.moveTo(hx,y0);g.lineTo(hx,y1);g.stroke()}}
+
+(function(){
+ var c=$('ncv');
+ function pick(e){
+  var n=ntpHist.length; if(!n)return;
+  var r=c.getBoundingClientRect();
+  var x=(e.clientX-r.left)*(c.width/r.width);
+  var x0=44,x1=c.width-8, f=(x-x0)/(x1-x0);
+  if(f<0)f=0; if(f>1)f=1;
+  ntpHover=Math.round(f*(n-1));
+  var s=ntpHist[ntpHover], ago=n-1-ntpHover;
+  t('ntip',(ago?ago+' fix'+(ago==1?'':'es')+' ago':'latest')+': '+num(s.u)+' us'+
+   (s.s?' — stepped':''));
+  drawNtp()}
+ c.addEventListener('mousemove',pick);
+ c.addEventListener('mouseleave',function(){
+  ntpHover=-1;t('ntip','hover the graph to inspect a fix');drawNtp()})
+})();
+
 function hhmm(s){if(s===null||s===undefined)return '-';
  var h=Math.floor(s/3600),m=Math.floor(s/60)%60,x=s%60;
  return (h<10?'0':'')+h+':'+(m<10?'0':'')+m+':'+(x<10?'0':'')+x}
@@ -454,6 +535,7 @@ function poll(){var mySeq=++pollSeq;
  if(d.web&&d.web!=WEBVER)$('stale').style.display='block';
  pumpLog();
  pumpErr();
+ pumpNtp();
 
  var L=d.loop,e=$('lstate');e.textContent=L.state;
  e.className='pill '+(L.state=='track'?'on':L.state=='hold'?'bad':'off');

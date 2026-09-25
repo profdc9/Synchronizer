@@ -60,6 +60,15 @@ uint64_t tb_last_fix_us(void);    /* local timer reading of the last fix  */
    so a bad fix lands in the model in one shot. */
 bool     tb_last_was_step(void);
 
+/* The web page's NTP-correction graph reads through these - same cursor
+   idiom as control.c's errhist/control_errhist_read().  tb_hist_seq() is
+   the current cursor; tb_hist_read() fills offset_us_out[]/stepped_out[]
+   with up to n samples from `from` onward (one per fix actually applied,
+   oldest first) and reports the cursor to pass next time. */
+uint32_t tb_hist_seq(void);
+uint32_t tb_hist_read(uint32_t from, int32_t *offset_us_out, int8_t *stepped_out,
+                      uint32_t n, uint32_t *next);
+
 #ifdef __cplusplus
 }
 #endif

@@ -431,6 +431,26 @@ void http_dispatch(const char *method, const char *path, const char *query,
     return;
   }
 
+  /* The NTP correction history, same cursor idiom as /api/errhist above -
+     one line per fix actually applied (a rejected fix corrected nothing,
+     so it is not here), as "offset_us,stepped" (stepped: 1 if it was
+     large enough to step the phase outright rather than slew it). */
+  if (strcmp(path, "/api/ntphist") == 0)
+  {
+    uint32_t from = (uint32_t)http_query_int(query, "from", 0);
+    int32_t  off_buf[128];
+    int8_t   step_buf[128];
+    uint32_t next = 0u, n, i, u;
+    n = tb_hist_read(from, off_buf, step_buf,
+                     sizeof(off_buf) / sizeof(off_buf[0]), &next);
+    u = (uint32_t)snprintf(scratch, scratch_len, "%lu\n", (unsigned long)next);
+    for (i = 0; i < n && u < scratch_len - 16u; i++)
+      u += (uint32_t)snprintf(scratch + u, scratch_len - u, "%ld,%d\n",
+                              (long)off_buf[i], step_buf[i]);
+    reply(out, 200, "text/plain; charset=utf-8", scratch, u);
+    return;
+  }
+
   if (strcmp(path, "/api/cli") == 0)
   {
     if (!post)

@@ -49,6 +49,47 @@ static int64_t  last_offset;
 static uint64_t last_fix_us;
 static bool     last_was_step;
 
+/* --- TBHIST: a ring of recent NTP fix offsets, for the web page's line
+   graph of correction size per update - same cursor idiom as control.c's
+   errhist.  Only fixes actually applied are recorded; one rejected by the
+   RTT gate corrected nothing, so there is nothing to plot, and the very
+   first fix (no prior model to compare against) is an anchor, not a
+   correction, so it is skipped too. Fixes land far less often than
+   pendulum swings, so this ring is smaller. */
+#define TBHIST_SIZE  256u
+typedef struct { int32_t offset_us; int8_t stepped; } tbhist_sample;
+static tbhist_sample tbhist[TBHIST_SIZE];
+static uint32_t       tbhist_seq;
+
+static void tbhist_push(int64_t offset_ns, bool stepped)
+{
+  tbhist[tbhist_seq % TBHIST_SIZE].offset_us = (int32_t)(offset_ns / 1000);
+  tbhist[tbhist_seq % TBHIST_SIZE].stepped   = stepped ? 1 : 0;
+  tbhist_seq++;
+}
+
+uint32_t tb_hist_seq(void) { return tbhist_seq; }
+
+uint32_t tb_hist_read(uint32_t from, int32_t *offset_us_out, int8_t *stepped_out,
+                      uint32_t n, uint32_t *next)
+{
+  uint32_t avail, want, start, i;
+
+  if (from > tbhist_seq) from = tbhist_seq;   /* a restarted device */
+  *next = tbhist_seq;
+  avail = tbhist_seq - from;
+  if (avail > TBHIST_SIZE) avail = TBHIST_SIZE;
+  want  = (avail < n) ? avail : n;
+  start = tbhist_seq - avail;
+  for (i = 0; i < want; i++)
+  {
+    const tbhist_sample *s = &tbhist[(start + i) % TBHIST_SIZE];
+    offset_us_out[i] = s->offset_us;
+    stepped_out[i]   = s->stepped;
+  }
+  return want;
+}
+
 void tb_init(int32_t seed_ppb)
 {
   base_utc_ns = 0;
@@ -129,6 +170,7 @@ bool tb_apply_fix(uint64_t local_us, uint64_t server_utc_ns, uint32_t rtt_us)
     base_us     = local_us;
     base_utc_ns = server_utc_ns;
     last_was_step = true;
+    tbhist_push(offset, true);
     return true;
   }
 
@@ -153,6 +195,7 @@ bool tb_apply_fix(uint64_t local_us, uint64_t server_utc_ns, uint32_t rtt_us)
   base_utc_ns = project(local_us) + (uint64_t)(offset / kp);
   base_us     = local_us;
   last_was_step = false;
+  tbhist_push(offset, false);
 
   return true;
 }
