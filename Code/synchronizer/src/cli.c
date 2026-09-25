@@ -202,6 +202,8 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   else
     printf("%-22s disabled (width 0), offset %ld us\r\n", "retard",
            (long)cfg.pulse_retard_us);
+  printf("%-22s advance speeds up a slow clock; retard slows down a fast"
+         " one\r\n", "");
   printf("%-22s %lu fired, %lu refused, %lu us budget\r\n", "pulses",
          (unsigned long)drive_pulse_count(), (unsigned long)drive_refused_count(),
          (unsigned long)drive_budget_us());
@@ -270,8 +272,11 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
      notices a real correction working within a few events instead of
      days - it is the honest answer to "how wrong does the device think
      the clock is right now". */
-  printf("%-22s %lld us\r\n", "uncorrected error",
-         (long long)(cs.sched_err_ns / 1000));
+  {
+    long long us = (long long)(cs.sched_err_ns / 1000);
+    printf("%-22s %lld us (%s)\r\n", "uncorrected error", us,
+           us > 0 ? "slow" : (us < 0 ? "fast" : "on time"));
+  }
   printf("%-22s %s, %u since last kick (min %u), trips at +-%u%%\r\n",
          "kick",
          cs.kick_active ? (cs.kick_dir_retard ? "retarding" : "advancing")

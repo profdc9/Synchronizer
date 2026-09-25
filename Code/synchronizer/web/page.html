@@ -57,7 +57,8 @@ reloading. <button onclick="location.reload(true)">Reload</button></div>
 <section><h2>Loop</h2>
 <table>
 <tr><td class="k">state</td><td class="v"><span id="lstate" class="pill">-</span></td></tr>
-<tr><td class="k">uncorrected error</td><td class="v"><span id="lschederr">-</span> us</td></tr>
+<tr><td class="k">uncorrected error</td><td class="v"><span id="lschederr">-</span> us
+ <span id="lschederrdir" style="color:var(--dim)">-</span></td></tr>
 <tr><td class="k">kick</td><td class="v"><span id="lkick" class="pill">-</span>
  <span id="lkicksince">-</span> since last (min <span id="lkickn2">-</span>)</td></tr>
 <tr id="mutedrow"><td class="k">actuator</td><td class="v"><span class="pill bad">muted</span>
@@ -169,11 +170,12 @@ leave it at 0 unless you want to correct for your own reaction.</div>
 <button onclick="act('pulse&us='+v('pw'))">Test pulse</button>
 <button onclick="act('coiloff')">Coil off</button></div>
 <div class="note">Width and offset (placement from the drive coil's centre) per direction,
-used by KICK's own pulses &mdash; an attract-only coil retards far more strongly than it
-advances, so each side usually wants its own width. 0 disables that direction's corrections
-entirely. The test pulse above is a manual one-off with its own width, unrelated to either.
-Use <code>FORCEERR</code> on the console to trigger KICK on demand and watch which way a
-placement actually moves the clock.</div>
+used by KICK's own pulses. <b>Advance</b> speeds up a slow clock; <b>retard</b> slows down a
+fast one. An attract-only coil retards far more strongly than it advances, so each side
+usually wants its own width. 0 disables that direction's corrections entirely. The test pulse
+above is a manual one-off with its own width, unrelated to either. Use <code>FORCEERR</code>
+on the console to trigger KICK on demand and watch which way a placement actually moves the
+clock.</div>
 </section>
 
 <section><h2>Time</h2>
@@ -263,6 +265,11 @@ function $(i){return document.getElementById(i)}
 function v(i){return $(i).value}
 function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}
 function num(x){return (x===null||x===undefined)?'-':(''+x).replace(/\B(?=(\d{3})+(?!\d))/g,' ')}
+/* sched_err_ns' sign convention: positive means the hands are behind and
+   the clock is running slow (wants advancing); negative means ahead and
+   running fast (wants retarding). Shared by the loop card and both graph
+   labels/tooltips below. */
+function slowfast(u){return u>0?'slow':u<0?'fast':'on time'}
 function post(u){return fetch(u,{method:'POST'}).then(function(r){return r.json().catch(function(){return{}})})}
 function act(a){post('/api/action?do='+a).then(poll)}
 function cfg(keys){var q=keys.split(',').map(function(k){return k+'='+encodeURIComponent(v(k))}).join('&');
@@ -389,8 +396,8 @@ function drawErr(){
   g.beginPath();g.arc(xf(i),yf(errHist[i].u),3.5,0,Math.PI*2);g.fill()}
 
  g.fillStyle=cs.getPropertyValue('--dim');g.font='10px ui-monospace,monospace';
- g.fillText((mx>=0?'+':'')+num(Math.round(mx))+' us',2,y0+8);
- g.fillText((mn>=0?'+':'')+num(Math.round(mn))+' us',2,y1);
+ g.fillText((mx>=0?'+':'')+num(Math.round(mx))+' us '+slowfast(mx),2,y0+8);
+ g.fillText((mn>=0?'+':'')+num(Math.round(mn))+' us '+slowfast(mn),2,y1);
 
  if(errHover>=0&&errHover<n){
   var hx=xf(errHover);
@@ -407,7 +414,7 @@ function drawErr(){
   if(f<0)f=0; if(f>1)f=1;
   errHover=Math.round(f*(n-1));
   var s=errHist[errHover], ago=n-1-errHover;
-  t('etip',(ago?ago+' swing'+(ago==1?'':'s')+' ago':'latest')+': '+num(s.u)+' us'+
+  t('etip',(ago?ago+' swing'+(ago==1?'':'s')+' ago':'latest')+': '+num(s.u)+' us ('+slowfast(s.u)+')'+
    (s.p==1?' — advance pulse':s.p==2?' — retard pulse':''));
   drawErr()}
  c.addEventListener('mousemove',pick);
@@ -553,6 +560,7 @@ function poll(){var mySeq=++pollSeq;
  ke.className='pill '+(L.kickact?'on':'off');
  t('lkicksince',num(L.kicksince));t('lkickn2',num(L.kickn));
  t('lschederr',num(L.schederr_us));
+ t('lschederrdir','('+slowfast(L.schederr_us)+')');
  $('mutedrow').style.display=L.act?'none':'';
 
  var C=d.clock;
