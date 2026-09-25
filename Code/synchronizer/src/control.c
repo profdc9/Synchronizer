@@ -96,6 +96,18 @@ static uint64_t rate_ns;             /* the tracking NCO's predicted event   */
 static int64_t  rate_acc;            /* its fractional accumulator           */
 static int64_t  rate_q;              /* learned offset, ns per 1024 events   */
 static bool     rate_have;
+/* Where swing N SHOULD land if the clock were exactly correct since
+   acquisition: anchor_utc_ns + N * nominal_interval, advanced by the same
+   fixed nom every event (and by k*nom when swings are folded in, same as
+   rate_ns) - nothing here ever learns or adapts, so a persistent rate
+   error cannot cancel itself out against it the way it does in rerr once
+   rate_q has learned it. */
+static uint64_t nominal_ns;
+/* KICK's feedback signal: a fast-smoothed ev->utc_ns - nominal_ns, NOT
+   rate_ns - nominal_ns - see the computation in track_event() for why
+   rate_ns (ki-driven, tens of thousands of events to respond) was too
+   slow to see its own corrections working before massively overshooting. */
+static int64_t  sched_err_ns;
 static int64_t  ff_last;
 static uint32_t rate_n;              /* events since the tracker started     */
 static int64_t  cmd_ns;
@@ -108,7 +120,39 @@ static int64_t  drift_ppb;
 /* --- KICK mode: a one-directional hysteresis scheme that needs no
    measured authority at all - see kick_step() below. */
 static bool     kick_active;
+static bool     kick_dir_retard;     /* which way THIS correction episode
+                                         is going - set when kick_active
+                                         trips, meaningless while idle.  No
+                                         longer a user setting: the
+                                         controller picks direction itself
+                                         from which threshold it hit. */
 static uint32_t kick_since;
+static int64_t  kick_filt_ns;       /* short EMA of demod_ns, time constant
+                                        kick_min_swings - a single raw sample
+                                        is noisy enough to flip sign event to
+                                        event, so this is what actually feeds
+                                        the accumulator below, not demod_ns
+                                        itself.                            */
+static int64_t  kick_accum_ns;      /* running sum of kick_filt_ns, never
+                                        decayed - KICK's hysteresis reacts to
+                                        THIS sign, not the EMA's.  A working
+                                        kick changes the pendulum, so this
+                                        crosses back through zero on its own
+                                        once corrections are actually landing;
+                                        it only grows without bound if they
+                                        are not (wrong direction, too little
+                                        authority per pulse, or not being
+                                        delivered at all) - which is exactly
+                                        the failure worth seeing, not
+                                        something to average away.  EMA-then-
+                                        sum converges to the same running
+                                        total as summing demod_ns directly
+                                        (bounded difference, not growing);
+                                        the EMA stage only buys faster, less
+                                        noisy convergence right after a
+                                        reset, before the sum itself has had
+                                        enough terms to average noise out on
+                                        its own.                           */
 
 static uint32_t acq_run;
 static uint64_t acq_prev_utc;
@@ -314,7 +358,8 @@ void control_reset(void)
   integ = 0; cmd_ns = 0; credit_ns = 0;
   rate_have = false; rate_q = 0; rate_acc = 0; rate_n = 0;
   last_err = 0; filt_err = 0; drift_ppb = 0;
-  kick_active = false; kick_since = 0;
+  kick_active = false; kick_dir_retard = false; kick_since = 0; kick_filt_ns = 0; kick_accum_ns = 0;
+  nominal_ns = 0; sched_err_ns = 0;
   acq_run = 0; acq_prev_utc = 0;
   meas_fired = 0; meas_resid = 0; m_phase = MP_NONE;
   pts_on = false; pts_settle = 0;
@@ -340,7 +385,13 @@ void control_set_offset_ns(int64_t o) { target_off = o; }
 void control_clear_credit(void)
 {
   credit_ns = 0; integ = 0;
-  kick_active = false; kick_since = 0;
+  kick_active = false; kick_dir_retard = false; kick_since = 0; kick_filt_ns = 0; kick_accum_ns = 0;
+}
+
+/* See doc comment in control.h - test only. */
+void control_force_sched_err_ns(int64_t ns)
+{
+  sched_err_ns = ns;
 }
 
 const char *control_state_name(control_state s)
@@ -780,40 +831,60 @@ static bool fire_for(const sense_event *ev, bool retard)
   return drive_pulse_at(when, cfg.pulse_us);
 }
 
-/* KICK mode: a one-directional hysteresis scheme that needs no measured
+/* KICK mode: a bang-bang hysteresis scheme that needs no measured
    authority at all - the alternative to spending credit_ns against a
    MEASURE'd price.  It fires no more often than every kick_min_swings
-   events, and only while the phase error sits on the side of zero this
-   direction is meant to correct; once ev->demod_ns crosses back to the
-   other side it goes idle and waits for the error to return before
-   resuming, so a single direction cannot overshoot and then fight itself
-   back the other way - it just stops and waits.
+   events.  There is no separate "advance mode" or "retard mode" to set -
+   it picks direction itself, from whichever threshold it hit:
 
-   ev->demod_ns follows the same sign convention as credit_ns above:
-   positive means the hands are ahead (fast) and want retarding, negative
-   means they are behind (slow) and want advancing. */
+     - error at or past -thr (ahead of true time by kick_threshold_pct of
+       a swing or more): start retarding, and keep retarding every
+       kick_min_swings swings until the error is back above zero - not
+       out to +thr, just past zero, since the trigger threshold's only
+       job is to ignore ordinary measurement noise near zero, not to
+       demand a full swing back the other way before it will stop.
+     - error at or past +thr: start advancing the same way, releasing
+       once it is back below zero.
+
+   sched_err_ns follows rerr/filt_err's sign convention (built from the
+   same rate_ns), which is the OPPOSITE of credit_ns/demod_ns's: negative
+   means the hands are ahead (fast) and want retarding, positive means
+   they are behind (slow) and want advancing.  See its declaration above
+   track_event() for what it actually measures and why filt_err and
+   demod_ns were each tried and rejected for this job before it. */
 static void kick_step(const sense_event *ev)
 {
   uint32_t need = cfg.kick_min_swings ? cfg.kick_min_swings : 5u;
+  int64_t  nom  = (int64_t)event_ns_nominal();
+  int64_t  thr  = (nom * (int64_t)(cfg.kick_threshold_pct
+                                    ? cfg.kick_threshold_pct : 25u)) / 100ll;
+  /* sched_err_ns: a fast-smoothed ev->utc_ns - nominal_ns - not rerr
+     (which measures the tracking NCO against ITSELF and converges to zero
+     once rate_q has learned whatever the pendulum is actually doing,
+     correct or not), not demod_ns (noisy per-sample, and turned out
+     sensitive to nearby magnets - see kick_filt_ns/kick_accum_ns above,
+     kept as diagnostics only), and not rate_ns - nominal_ns either (tried
+     first, but rate_ns's ki-driven integrator takes days to respond, so
+     it stayed blind to its own corrections and massively overshot).
+     nominal_ns never moves, so a persistent error still cannot cancel
+     itself out here - it just keeps growing until a real correction
+     lands - but this responds to that correction in a few events instead
+     of tens of thousands. */
+  int64_t  fe   = sched_err_ns;
 
   if (kick_since < 0xffffffffu) kick_since++;
 
-  if (cfg.kick_retard)
+  if (!kick_active)
   {
-    /* retard mode: active while the hands are ahead of true time */
-    if (kick_active) { if (ev->demod_ns <= 0) kick_active = false; }
-    else              { if (ev->demod_ns >  0) kick_active = true;  }
-    if (actuator_on && kick_active && kick_since >= need && fire_for(ev, true))
-      { kick_since = 0; disc_pulses++; }
+    if      (fe <= -thr) { kick_active = true; kick_dir_retard = true;  }
+    else if (fe >=  thr) { kick_active = true; kick_dir_retard = false; }
   }
-  else
-  {
-    /* advance mode: active while the hands are behind true time */
-    if (kick_active) { if (ev->demod_ns >= 0) kick_active = false; }
-    else              { if (ev->demod_ns <  0) kick_active = true;  }
-    if (actuator_on && kick_active && kick_since >= need && fire_for(ev, false))
-      { kick_since = 0; disc_pulses++; }
-  }
+  else if (kick_dir_retard) { if (fe > 0) kick_active = false; }
+  else                      { if (fe < 0) kick_active = false; }
+
+  if (actuator_on && kick_active && kick_since >= need &&
+      fire_for(ev, kick_dir_retard))
+    { kick_since = 0; disc_pulses++; }
 }
 
 static void track_event(const sense_event *ev)
@@ -829,7 +900,8 @@ static void track_event(const sense_event *ev)
      reference that was never anchored to anything. */
   if (!rate_have)
   {
-    rate_ns = ev->utc_ns; rate_acc = 0; rate_q = 0; rate_n = 0;
+    rate_ns = ev->utc_ns; nominal_ns = ev->utc_ns;
+    rate_acc = 0; rate_q = 0; rate_n = 0;
     rate_have = true;
     events++;
     return;
@@ -847,9 +919,10 @@ static void track_event(const sense_event *ev)
      at whatever rate the real pendulum differs from nominal, forever,
      until it crossed the slip threshold on its own and forced a "random"
      reacquire with no actual disturbance behind it. */
-  rate_acc += rate_q;
-  rate_ns  += (uint64_t)(nom + rate_acc / RATE_SCALE);
-  rate_acc -= (rate_acc / RATE_SCALE) * RATE_SCALE;
+  rate_acc   += rate_q;
+  rate_ns    += (uint64_t)(nom + rate_acc / RATE_SCALE);
+  rate_acc   -= (rate_acc / RATE_SCALE) * RATE_SCALE;
+  nominal_ns += (uint64_t)nom;
 
   rerr = (int64_t)ev->utc_ns - (int64_t)rate_ns;
   k    = (rerr >= 0) ? ((rerr + nom / 2) / nom) : ((rerr - nom / 2) / nom);
@@ -876,9 +949,10 @@ static void track_event(const sense_event *ev)
     /* k swings were silently missed - fold their worth of nominal
        intervals into the prediction so the residual below is relative to
        THIS event, not still carrying the gap. */
-    rate_ns += (uint64_t)(k * nom);
-    rerr    -= k * nom;
-    missed  += (uint32_t)k;
+    rate_ns    += (uint64_t)(k * nom);
+    nominal_ns += (uint64_t)(k * nom);
+    rerr       -= k * nom;
+    missed     += (uint32_t)k;
   }
 
   meas_resid = rerr;
@@ -899,6 +973,21 @@ static void track_event(const sense_event *ev)
 
   /* The learned offset, as parts per billion of the nominal interval. */
   drift_ppb = (rate_q * 1000000000ll) / (RATE_SCALE * nom);
+
+  /* Direct comparison against the fixed schedule, smoothed with a short,
+     fast average (time constant kick_min_swings) - NOT rate_ns, whose
+     ki-driven integrator (2*kp*kp, tens of thousands of events) takes on
+     the order of days to respond at this clock's rate.  A real correction
+     shows up in ev->utc_ns within the next event or two; routing this
+     through rate_ns instead meant the feedback signal stayed blind to its
+     own corrections actually working for far longer than a correction
+     episode lasts, which is what caused KICK to massively overshoot
+     before it ever noticed and released. */
+  {
+    int64_t kn2 = (int64_t)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u);
+    int64_t raw = (int64_t)ev->utc_ns - (int64_t)nominal_ns;
+    sched_err_ns += (raw - sched_err_ns) / kn2;
+  }
 
   if (pts_on && pts_settle > 0u && st == CTRL_TRACK)
   {
@@ -944,6 +1033,11 @@ static void track_event(const sense_event *ev)
      cmd_ns is a live phase-error readout for STATUS either way; it is not
      itself a controller output any more (see the KICK mode comment). */
   cmd_ns = ev->demod_ns;
+  {
+    int64_t kn = (int64_t)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u);
+    kick_filt_ns  += (ev->demod_ns - kick_filt_ns) / kn;
+    kick_accum_ns += kick_filt_ns;
+  }
 
   if (cfg.control_mode == 1u)
   {
@@ -1034,11 +1128,12 @@ static void acquire_event(const sense_event *ev)
        free-runs every event track_event() is not called, not just the
        ones spent in CTRL_HOLD, and would report a huge, spurious slip on
        the very next event. */
-    rate_ns   = ev->utc_ns;
-    rate_have = true;
-    rate_acc  = 0;
-    rate_q    = 0;
-    rate_n    = 0;
+    rate_ns    = ev->utc_ns;
+    nominal_ns = ev->utc_ns;
+    rate_have  = true;
+    rate_acc   = 0;
+    rate_q     = 0;
+    rate_n     = 0;
     events    = 0;
     missed    = 0;
     integ     = 0;
@@ -1047,8 +1142,11 @@ static void acquire_event(const sense_event *ev)
     last_err  = 0;
     filt_err  = 0;
     drift_ppb = 0;
-    kick_active = false;
-    kick_since  = 0;
+    kick_active     = false;
+    kick_dir_retard = false;
+    kick_since      = 0;
+    kick_filt_ns  = 0;
+    kick_accum_ns = 0;
     st = CTRL_TRACK;
   }
 }
@@ -1106,10 +1204,20 @@ void control_poll(void)
     else if (now - phaselog_last_us >= (uint64_t)phaselog_secs * 1000000ull)
     {
       uint32_t fired = disc_pulses - phaselog_last_pulses;
-      printf("phaselog: %s  err %lld us  filt %lld us  %lu pulses in the"
-             " last %lu s (%lu total)\r\n",
+      /* filt_err (edge-based, rerr) and kick_filt_ns (phase-based, demod_ns)
+         have OPPOSITE sign conventions - see the comment on kick_filt_ns
+         above.  Negate filt_err first so both are in "positive = hands
+         ahead, wants retarding" terms before comparing; what is left is
+         how much the two measurement methods actually disagree right now. */
+      printf("phaselog: %s  err %lld us  filt %lld us  kickfilt %lld us"
+             "  kickaccum %lld us  diff %lld us  uncorrected %lld us"
+             "  %lu pulses in the last %lu s (%lu total)\r\n",
              control_state_name(st), (long long)(last_err / 1000),
-             (long long)(filt_err / 1000), (unsigned long)fired,
+             (long long)(filt_err / 1000), (long long)(kick_filt_ns / 1000),
+             (long long)(kick_accum_ns / 1000),
+             (long long)((-filt_err - kick_filt_ns) / 1000),
+             (long long)(sched_err_ns / 1000),
+             (unsigned long)fired,
              (unsigned long)phaselog_secs, (unsigned long)disc_pulses);
       phaselog_last_pulses = disc_pulses;
       phaselog_last_us = now;
@@ -1135,5 +1243,9 @@ void control_stats_get(control_stats *o)
   o->missed           = missed;
   o->target_offset_ns = target_off;
   o->kick_active       = kick_active ? 1u : 0u;
+  o->kick_dir_retard   = kick_dir_retard ? 1u : 0u;
   o->kick_since        = kick_since;
+  o->kick_filt_ns      = kick_filt_ns;
+  o->kick_accum_ns     = kick_accum_ns;
+  o->sched_err_ns      = sched_err_ns;
 }

@@ -91,7 +91,15 @@ typedef struct _control_stats
   int64_t  target_offset_ns;  /* deliberate offset of the hands          */
   uint8_t  kick_active;       /* KICK mode: currently in the correcting
                                   phase, vs idle waiting to cross back    */
+  uint8_t  kick_dir_retard;   /* KICK mode: which way THIS episode is
+                                  going - only meaningful if kick_active   */
   uint32_t kick_since;        /* KICK mode: swings since the last pulse  */
+  int64_t  kick_filt_ns;      /* KICK mode: short EMA of demod_ns - now a
+                                  diagnostic only, not what fires anything */
+  int64_t  kick_accum_ns;     /* KICK mode: running sum of kick_filt_ns -
+                                  also diagnostic only, see sched_err_ns   */
+  int64_t  sched_err_ns;      /* rate_ns - nominal_ns: what KICK's
+                                  hysteresis actually reacts to now        */
 } control_stats;
 
 void control_init(void);
@@ -123,6 +131,15 @@ void control_set_offset_ns(int64_t offset_ns);
    parameters change, for the same reason: state built up under the old
    settings should not carry over into the new ones. */
 void control_clear_credit(void);
+
+/* Test only: seed sched_err_ns ("uncorrected error") directly, so KICK's
+   hysteresis reacts to it on the very next tracked event instead of
+   waiting for a real error of that size to occur naturally.  Useful for
+   exercising the advance side of KICK on a clock that in practice only
+   ever drifts fast enough to need retarding.  Decays back toward whatever
+   the real, measured schedule error is at the usual kick_min_swings-event
+   pace, same as any other sample fed into that EMA. */
+void control_force_sched_err_ns(int64_t ns);
 
 /* Fire one pulse per event for n events and report the phase step, which
    is the loop gain.  Run this with the loop switched off. */

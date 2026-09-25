@@ -57,6 +57,7 @@ reloading. <button onclick="location.reload(true)">Reload</button></div>
 <section><h2>Loop</h2>
 <table>
 <tr><td class="k">state</td><td class="v"><span id="lstate" class="pill">-</span></td></tr>
+<tr><td class="k">uncorrected error</td><td class="v"><span id="lschederr">-</span> us</td></tr>
 <tr><td class="k">mode</td><td class="v">
 <select id="mode" onchange="cfg('mode')"><option value="1">kick (hysteresis)</option><option value="0">auth (measured)</option></select>
 </td></tr>
@@ -74,9 +75,9 @@ reloading. <button onclick="location.reload(true)">Reload</button></div>
 <div class="row"><button id="ctlbtn" class="p">-</button>
 <button onclick="act('resetloop')">Re-acquire</button></div>
 <div class="row" id="kickrow2"><label>kick</label>
-<select id="kickdir"><option value="0">advance</option><option value="1">retard</option></select>
 <label style="min-width:70px">min swings</label><input id="kickn" style="width:62px">
-<button onclick="cfg('kickdir,kickn')">Apply</button></div>
+<label style="min-width:70px">trip %</label><input id="kickthr" style="width:48px">
+<button onclick="cfg('kickn,kickthr')">Apply</button></div>
 <div class="row"><label>kp/ki</label><input id="kp"><input id="ki">
 <label style="min-width:34px">slew</label><input id="slew" style="width:62px">
 <button onclick="cfg('kp,ki,slew')">Apply</button></div>
@@ -235,7 +236,7 @@ from here is visible to anyone watching it.</p>
 <option value="PULSE 2000"><option value="COILOFF"><option value="COILTEST 3000 YES"><option value="SAVE">
 <option value="AUTH 0 4200000"><option value="RATEKP 350"><option value="FILTER 16 4 12">
 <option value="LOOPMODE KICK"><option value="LOOPMODE AUTH">
-<option value="KICK 5 N"><option value="KICK 5 Y">
+<option value="KICK 5 25">
 <option value="HYST 30"><option value="PTIME 20000 20000">
 </datalist>
 <pre id="out">Nothing run yet.</pre>
@@ -385,14 +386,16 @@ function poll(){var mySeq=++pollSeq;
  var b=$('ctlbtn');b.textContent=L.on?'Stop loop':'Start loop';
  b.onclick=function(){act('control&on='+(L.on?0:1))};
  fld('kp',L.kp);fld('ki',L.ki);fld('slew',L.slew);
- fld('mode',L.mode);fld('kickdir',L.kickdir);fld('kickn',L.kickn);
+ fld('mode',L.mode);fld('kickn',L.kickn);fld('kickthr',L.kickthr);
  var kickon=(L.mode==1);
  $('kickrow1').style.display=kickon?'':'none';
  $('kickrow2').style.display=kickon?'':'none';
  $('authrow1').style.display=kickon?'none':'';
- var ke=$('lkick');ke.textContent=L.kickact?'active':'idle';
+ var ke=$('lkick');
+ ke.textContent=L.kickact?(L.kickdir?'retarding':'advancing'):'idle';
  ke.className='pill '+(L.kickact?'on':'off');
  t('lkicksince',num(L.kicksince));t('lkickn2',num(L.kickn));
+ t('lschederr',num(L.schederr_us));
  $('mutedrow').style.display=L.act?'none':'';
 
  var C=d.clock;

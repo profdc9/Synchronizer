@@ -171,15 +171,26 @@ typedef struct _synchronizer_config
            price (auth_advance_ns/auth_retard_ns below) - needs MEASURE or
            PTIMESCAN run first, but once priced it can spend either
            direction as needed.
-       1 = KICK: a simple one-directional hysteresis scheme that needs no
-           measured authority at all - see kick_retard/kick_min_swings
-           below and the kick_step() comment in control.c.  This is the
-           default: it works with nothing calibrated yet. */
+       1 = KICK: a bang-bang hysteresis scheme that needs no measured
+           authority at all - see kick_min_swings/kick_threshold_pct
+           below and the kick_step() comment in control.c.  It picks
+           advance or retard itself, at runtime, from which threshold it
+           hit - there is no direction to configure here any more.  This
+           is the default: it works with nothing calibrated yet. */
   uint8_t  control_mode;
-  uint8_t  kick_retard;         /* KICK mode: 0 advance, 1 retard          */
+  uint8_t  pad_kickdir;         /* was a KICK direction setting; the
+                                    controller now picks direction itself,
+                                    so this is unused - left in place
+                                    rather than reshuffling the layout */
   uint8_t  pad0;
   uint16_t kick_min_swings;     /* KICK mode: min swings between pulses    */
-  uint16_t pad0b;
+  /* KICK's hysteresis trips at +-this fraction of a swing (percent of the
+     nominal interval) on filt_err (edge-based, rerr) - not demod_ns, which
+     turned out vulnerable to sense-coil proximity artifacts a plain
+     magnet near the coil could trigger.  25 (a quarter swing) is a wide
+     enough band to sit comfortably above ordinary measurement noise.
+     Reuses what used to be plain padding, so no config version bump. */
+  uint16_t kick_threshold_pct;
   /* The loop is parameterised in swings rather than seconds because the
      pendulum, not the wall clock, is what it acts on.  kp_swings is the
      number of swings over which a standing phase error would be taken out

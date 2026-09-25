@@ -263,12 +263,30 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
                            : "AUTH - spends measured pulse authority");
   if (!control_actuator())
     printf("%-22s muted - tracking continues, no pulses will fire\r\n", "actuator");
+  /* A fast-smoothed comparison against a plain, never-adapting nominal
+     schedule.  Grows without bound while the clock is genuinely off and
+     nothing is correcting it; unlike "phase error" below, it cannot
+     converge to zero just because the tracker has learned to predict a
+     wrong rate, and unlike routing it through the tracking NCO, it
+     notices a real correction working within a few events instead of
+     days.  Computed either way, not just under KICK - AUTH mode never
+     looks at it, but it is still the honest answer to "how wrong does
+     the device think the clock is right now". */
+  printf("%-22s %lld us\r\n", "uncorrected error",
+         (long long)(cs.sched_err_ns / 1000));
   if (cfg.control_mode)
-    printf("%-22s %s, %s, %u since last kick (min %u)\r\n", "kick",
-           cfg.kick_retard ? "retard" : "advance",
-           cs.kick_active ? "active" : "idle",
+    printf("%-22s %s, %u since last kick (min %u), trips at +-%u%%\r\n",
+           "kick",
+           cs.kick_active ? (cs.kick_dir_retard ? "retarding" : "advancing")
+                          : "idle",
            (unsigned)cs.kick_since,
-           (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u));
+           (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u),
+           (unsigned)(cfg.kick_threshold_pct ? cfg.kick_threshold_pct : 25u));
+  /* err_ns/filt_err_ns (edge-based, rerr) and kick_filt_ns (phase-based,
+     demod_ns) have opposite sign conventions - negate the former so both
+     read "positive = hands ahead, wants retarding" before comparing. */
+  printf("%-22s %lld us\r\n", "edge vs phase",
+         (long long)((-cs.filt_err_ns - cs.kick_filt_ns) / 1000));
   printf("%-22s %llu  (%lu missed)\r\n", "events", (unsigned long long)cs.events,
          (unsigned long)cs.missed);
   print_ns("phase error", cs.err_ns);
@@ -543,12 +561,23 @@ static int loopmode_cmd(int args, tinycl_parameter *tp, void *v)
 static int kick_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
-  cfg.kick_min_swings = (uint16_t)tp[0].ti.i;
-  cfg.kick_retard     = tp[1].tb.b ? 1u : 0u;
+  cfg.kick_min_swings    = (uint16_t)tp[0].ti.i;
+  cfg.kick_threshold_pct = (uint16_t)tp[1].ti.i;
   control_clear_credit();
-  printf("kick mode: %s, minimum %u swings between pulses\r\n",
-         cfg.kick_retard ? "retard" : "advance",
-         (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u));
+  printf("kick: minimum %u swings between pulses, trips at +-%u%% of a"
+         " swing - picks advance or retard itself\r\n",
+         (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u),
+         (unsigned)(cfg.kick_threshold_pct ? cfg.kick_threshold_pct : 25u));
+  return 1;
+}
+
+static int forceerr_cmd(int args, tinycl_parameter *tp, void *v)
+{
+  (void)args; (void)v;
+  int64_t us = (int64_t)tp[0].ti.i;
+  control_force_sched_err_ns(us * 1000ll);
+  printf("uncorrected error forced to %lld us - KICK reacts on the next"
+         " tracked event\r\n", (long long)us);
   return 1;
 }
 
@@ -1096,7 +1125,8 @@ static const tinycl_command tcmds[] =
   { "PTIME",    "advance_us retard_us - pulse placing",   ptime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "AUTH",     "advance_ns retard_ns - step one pulse buys", auth_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "LOOPMODE", "AUTH|KICK - which algorithm CONTROL uses", loopmode_cmd, {TINYCL_PARM_STR, TINYCL_PARM_END} },
-  { "KICK",     "min_swings retard(y|n) - hysteresis mode params", kick_cmd, {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
+  { "KICK",     "min_swings threshold_pct - hysteresis params, picks direction itself", kick_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "FORCEERR", "us - test only: seed uncorrected error to trigger KICK", forceerr_cmd, {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "MEASURE",  "pulses retard(y|n) - authority, takes 3x that many swings", measure_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "PTIMESCAN","retard(y|n) lo hi steps swings - sweep placement", ptimescan_cmd,
                 {TINYCL_PARM_BOOL, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },

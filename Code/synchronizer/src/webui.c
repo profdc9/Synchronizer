@@ -195,6 +195,9 @@ static uint32_t json_status(char *b, uint32_t n)
   u += (uint32_t)snprintf(b + u, n - u,
     "\"loop\":{\"state\":\"%s\",\"on\":%d,\"act\":%d,\"mode\":%d,"
       "\"kickact\":%d,\"kicksince\":%lu,\"kickn\":%u,\"kickdir\":%d,"
+      "\"kickthr\":%u,"
+      "\"kickfilt_us\":%lld,\"kickaccum_us\":%lld,\"diff_us\":%lld,"
+      "\"schederr_us\":%lld,"
       "\"events\":%llu,\"missed\":%lu,"
       "\"err_us\":%lld,\"filt_us\":%lld,\"cmd_ns\":%lld,\"credit_ns\":%lld,"
       "\"drift_ppb\":%lld,\"offset_ms\":%lld,"
@@ -202,7 +205,11 @@ static uint32_t json_status(char *b, uint32_t n)
     control_state_name(cs.state), cfg.control_enabled ? 1 : 0,
     control_actuator() ? 1 : 0, cfg.control_mode,
     cs.kick_active ? 1 : 0, (unsigned long)cs.kick_since,
-    (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u), cfg.kick_retard,
+    (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u), cs.kick_dir_retard,
+    (unsigned)(cfg.kick_threshold_pct ? cfg.kick_threshold_pct : 25u),
+    (long long)(cs.kick_filt_ns / 1000), (long long)(cs.kick_accum_ns / 1000),
+    (long long)((-cs.filt_err_ns - cs.kick_filt_ns) / 1000),
+    (long long)(cs.sched_err_ns / 1000),
     (unsigned long long)cs.events, (unsigned long)cs.missed,
     (long long)(cs.err_ns / 1000), (long long)(cs.filt_err_ns / 1000),
     (long long)cs.cmd_ns_per_swing, (long long)cs.credit_ns,
@@ -333,9 +340,8 @@ static bool apply_config(const char *q)
   if (set_u32(q, "slew",   &t, 1u, 100000u))   { cfg.slew_limit_ppm = (int32_t)t;    touched = true; }
   if (set_u32(q, "mode",   &t, 0u, 1u))
     { cfg.control_mode = (uint8_t)t; touched = true; control_clear_credit(); }
-  if (set_u32(q, "kickdir",&t, 0u, 1u))
-    { cfg.kick_retard = (uint8_t)t;  touched = true; control_clear_credit(); }
   if (set_u32(q, "kickn",  &t, 1u, 2000u))     { cfg.kick_min_swings = (uint16_t)t; touched = true; }
+  if (set_u32(q, "kickthr",&t, 1u, 49u))       { cfg.kick_threshold_pct = (uint16_t)t; touched = true; }
   if (set_u32(q, "cint",   &t, 1u, 720u))      { cfg.chime_interval_min = t;      touched = true; }
   {
     char v[16];
