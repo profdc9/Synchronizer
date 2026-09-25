@@ -32,14 +32,21 @@ extern "C" {
 
 /* The loop keeps the pendulum on rate, which makes the clock KEEP good time
    but says nothing about what the hands actually read - that depends on
-   where they were put.  The chime settles it.
+   where they were put.  The chime settles it - purely as a diagnostic.
 
    You say which hour the clock is about to strike, and press the button when
    you hear it.  The device stamps UTC at that instant, and the difference
    between the two is how far the hands are from the truth.  From then on it
-   can say when the next chime is due, and hand the same figure to the
-   control loop to walk the hands into agreement without anybody touching
-   them.
+   can say when the next chime is due and what the hands should currently
+   read.
+
+   There used to be a way to hand that figure to the control loop and have
+   it walk the hands into agreement via corrective pulses.  Removed: the
+   magnet's authority is a fraction of a millisecond per pulse, fired at
+   most every kick_min_swings swings - correcting even one second that way
+   is on the order of ten thousand pulses, hours to days.  A real chime
+   discrepancy gets fixed by moving the hands, not by asking the loop to
+   grind it out.
 
    A press is a human reaction behind the sound - a few hundred milliseconds,
    biased one way - which is why chime_latency_ms exists.  It defaults to
@@ -58,14 +65,14 @@ bool    chime_have(void);
 int32_t chime_offset_ms(void);     /* hands ahead of true local time */
 uint64_t chime_marked_utc_ns(void);
 
+/* What the hands should currently read - the last chime mark's offset
+   applied to the true local time right now.  False if never measured. */
+bool chime_face_now_sod(uint32_t *face_sod);
+
 /* When the clock will next strike, given the offset last measured.
    seconds_away and the local seconds-of-day of both the face time it will
    show and the true time it will happen at.  False if never measured. */
 bool chime_next(uint32_t *seconds_away, uint32_t *face_sod, uint32_t *true_sod);
-
-/* Hand the measured error to the control loop, which slews it out at the
-   rate limit.  False if there is nothing measured. */
-bool chime_apply_to_loop(void);
 
 void chime_forget(void);
 

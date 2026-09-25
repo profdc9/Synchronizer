@@ -67,7 +67,6 @@ reloading. <button onclick="location.reload(true)">Reload</button></div>
 <tr><td class="k">smoothed</td><td class="v"><span id="lfilt">-</span> us</td></tr>
 <tr><td class="k">events</td><td class="v"><span id="lev">-</span></td></tr>
 <tr><td class="k">pendulum drift</td><td class="v"><span id="ldrift">-</span> ppb</td></tr>
-<tr><td class="k">hand offset</td><td class="v"><span id="loff">-</span> ms</td></tr>
 </table>
 <div class="row"><button id="ctlbtn" class="p">-</button>
 <button onclick="act('resetloop')">Re-acquire</button></div>
@@ -78,9 +77,6 @@ reloading. <button onclick="location.reload(true)">Reload</button></div>
 <div class="row"><label>kp/ki</label><input id="kp"><input id="ki">
 <label style="min-width:34px">slew</label><input id="slew" style="width:62px">
 <button onclick="cfg('kp,ki,slew')">Apply</button></div>
-<div class="row"><label>offset ms</label><input id="offms" value="0">
-<button onclick="act('offset&ms='+v('offms'))">Walk hands</button></div>
-<div class="note">A positive offset holds the hands <em>back</em> &mdash; use it when the clock is running ahead. The loop slews there at the rate limit; it never jumps.</div>
 </section>
 
 <section><h2>Clock</h2>
@@ -114,12 +110,14 @@ moment you hear it. That is what tells the device where the hands actually are.<
 <div class="big-row"><button class="p big" onclick="heard()">Heard it &mdash; now</button></div>
 <table style="margin-top:12px">
 <tr><td class="k">hands are</td><td class="v"><span id="choff">not measured</span></td></tr>
+<tr><td class="k">clock face reads</td><td class="v"><span id="chnow">-</span></td></tr>
 <tr><td class="k">next chime</td><td class="v"><span id="chnext">-</span></td></tr>
 <tr><td class="k">it will strike</td><td class="v"><span id="chface">-</span></td></tr>
 <tr><td class="k">at true time</td><td class="v"><span id="chtrue">-</span></td></tr>
 </table>
-<div class="row"><button onclick="act('chimeapply')">Let the loop correct it</button>
-<button onclick="act('chimeforget')">Forget</button></div>
+<div class="row"><button onclick="act('chimeforget')">Forget</button></div>
+<div class="note">Diagnostic only &mdash; the magnet doesn't have the authority to walk out a
+real discrepancy in any reasonable time, so a genuine offset needs the hands moved by hand.</div>
 <div class="row"><label>every</label><input id="cint" style="width:52px">
 <span class="note" style="margin:0">min</span>
 <label style="min-width:74px">press delay</label><input id="clat" style="width:56px">
@@ -550,7 +548,7 @@ function poll(){var mySeq=++pollSeq;
  var L=d.loop,e=$('lstate');e.textContent=L.state;
  e.className='pill '+(L.state=='track'?'on':L.state=='hold'?'bad':'off');
  t('lerr',num(L.err_us));t('lfilt',num(L.filt_us));t('lev',num(L.events)+' ('+L.missed+' missed)');
- t('ldrift',num(L.drift_ppb));t('loff',num(L.offset_ms));
+ t('ldrift',num(L.drift_ppb));
  var b=$('ctlbtn');b.textContent=L.on?'Stop loop':'Start loop';
  b.onclick=function(){act('control&on='+(L.on?0:1))};
  fld('kp',L.kp);fld('ki',L.ki);fld('slew',L.slew);
@@ -593,11 +591,12 @@ function poll(){var mySeq=++pollSeq;
  if(C2.have){var o=C2.offset_ms/1000;
   t('choff',(Math.abs(o)).toFixed(2)+' s '+(o>=0?'FAST':'slow'));
   $('choff').className=Math.abs(o)<2?'ok':'';
+  t('chnow',C2.have_now?hhmm(C2.now_sod):'-');
   if(C2.next){var a=C2.away;
    t('chnext',Math.floor(a/60)+'m '+(a%60)+'s');
    t('chface',hhmm(C2.face_sod));t('chtrue',hhmm(C2.true_sod));}
   else {t('chnext','-');t('chface','-');t('chtrue','-')}}
- else {t('choff','not measured');t('chnext','-');t('chface','-');t('chtrue','-')}
+ else {t('choff','not measured');t('chnow','-');t('chnext','-');t('chface','-');t('chtrue','-')}
  fld('cint',C2.interval);fld('clat',C2.latency);
  if(document.activeElement!==$('ch')&&C2.sod<86400){
   var nh=(Math.floor(C2.sod/3600)+1)%24; if($('ch').value==='')$('ch').value=nh%12||12}

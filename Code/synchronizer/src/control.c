@@ -109,7 +109,6 @@ static int64_t  sched_err_ns;
 static int64_t  ff_last;
 static uint32_t rate_n;              /* events since the tracker started     */
 static int64_t  cmd_ns;
-static int64_t  target_off;
 static int64_t  last_err;
 static int64_t  filt_err;
 static int64_t  drift_ppb;
@@ -263,8 +262,6 @@ void control_enable(bool on)
   if (on) { if (st == CTRL_IDLE) { control_reset(); st = CTRL_ACQUIRE; } }
   else    { st = CTRL_IDLE; drive_all_off(); }
 }
-
-void control_set_offset_ns(int64_t o) { target_off = o; }
 
 /* Zero KICK's active/idle latch and since-last-kick counter.  Call whenever
    KICK's own parameters change: state built up under the old settings
@@ -698,7 +695,6 @@ void control_stats_get(control_stats *o)
       4u * (cfg.rate_kp_events ? cfg.rate_kp_events : 350u)) ? 1u : 0u);
   o->pulses           = drive_pulse_count();
   o->missed           = missed;
-  o->target_offset_ns = target_off;
   o->kick_active       = kick_active ? 1u : 0u;
   o->kick_dir_retard   = kick_dir_retard ? 1u : 0u;
   o->kick_since        = kick_since;

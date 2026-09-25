@@ -201,7 +201,7 @@ static uint32_t json_status(char *b, uint32_t n)
       "\"schederr_us\":%lld,"
       "\"events\":%llu,\"missed\":%lu,"
       "\"err_us\":%lld,\"filt_us\":%lld,\"cmd_ns\":%lld,"
-      "\"drift_ppb\":%lld,\"offset_ms\":%lld,"
+      "\"drift_ppb\":%lld,"
       "\"kp\":%lu,\"ki\":%lu,\"slew\":%ld},",
     control_state_name(cs.state), cfg.control_enabled ? 1 : 0,
     control_actuator() ? 1 : 0,
@@ -214,21 +214,23 @@ static uint32_t json_status(char *b, uint32_t n)
     (unsigned long long)cs.events, (unsigned long)cs.missed,
     (long long)(cs.err_ns / 1000), (long long)(cs.filt_err_ns / 1000),
     (long long)cs.cmd_ns_per_swing,
-    (long long)cs.drift_ppb, (long long)(cs.target_offset_ns / 1000000),
+    (long long)cs.drift_ppb,
     (unsigned long)cfg.kp_swings, (unsigned long)cfg.ki_swings,
     (long)cfg.slew_limit_ppm);
 
   {
-    uint32_t away = 0, face = 0, real = 0;
+    uint32_t away = 0, face = 0, real = 0, now_sod = 0;
     bool nxt = chime_next(&away, &face, &real);
+    bool have_now = chime_face_now_sod(&now_sod);
     u += (uint32_t)snprintf(b + u, n - u,
       "\"chime\":{\"have\":%d,\"offset_ms\":%ld,\"interval\":%lu,"
         "\"latency\":%lu,\"next\":%d,\"away\":%lu,\"face_sod\":%lu,"
-        "\"true_sod\":%lu,\"sod\":%lu},",
+        "\"true_sod\":%lu,\"sod\":%lu,\"now_sod\":%lu,\"have_now\":%d},",
       chime_have() ? 1 : 0, (long)chime_offset_ms(),
       (unsigned long)cfg.chime_interval_min, (unsigned long)cfg.chime_latency_ms,
       nxt ? 1 : 0, (unsigned long)away, (unsigned long)face,
-      (unsigned long)real, (unsigned long)chime_local_sod());
+      (unsigned long)real, (unsigned long)chime_local_sod(),
+      (unsigned long)now_sod, have_now ? 1 : 0);
   }
 
   u += (uint32_t)snprintf(b + u, n - u,
@@ -546,7 +548,6 @@ void http_dispatch(const char *method, const char *path, const char *query,
     { reply_lit(out, 503, "application/json",
                 "{\"ok\":false,\"err\":\"no time yet\"}"); return; }
 
-    if (http_query_int(query, "apply", 0)) chime_apply_to_loop();
     reply_lit(out, 200, "application/json", "{\"ok\":true}");
     return;
   }
@@ -575,8 +576,6 @@ void http_dispatch(const char *method, const char *path, const char *query,
       drive_pulse((uint32_t)http_query_int(query, "us", 0));
     else if (strcmp(act, "coiloff") == 0)
       drive_all_off();
-    else if (strcmp(act, "offset") == 0)
-      control_set_offset_ns((int64_t)http_query_int(query, "ms", 0) * 1000000ll);
     else if (strcmp(act, "sync") == 0)
       net_request_sync();
     else if (strcmp(act, "scanwifi") == 0)
@@ -585,8 +584,6 @@ void http_dispatch(const char *method, const char *path, const char *query,
       net_ap_force(http_query_int(query, "on", 1) != 0);
     else if (strcmp(act, "resetloop") == 0)
       control_reset();
-    else if (strcmp(act, "chimeapply") == 0)
-      chime_apply_to_loop();
     else if (strcmp(act, "chimeforget") == 0)
       chime_forget();
     else if (strcmp(act, "resonance") == 0)

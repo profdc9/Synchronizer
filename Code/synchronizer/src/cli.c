@@ -243,11 +243,13 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   printf("\r\n-- chime ------------------------------------------------\r\n");
   if (chime_have())
   {
-    uint32_t away, face, real;
+    uint32_t away, face, real, now_sod;
     int32_t  o = chime_offset_ms();
     printf("%-22s %ld.%03lu s %s\r\n", "hands are",
            (long)(o / 1000), (unsigned long)(abs(o) % 1000),
            (o >= 0) ? "fast" : "slow");
+    if (chime_face_now_sod(&now_sod))
+      print_sod("clock face reads", now_sod);
     if (chime_next(&away, &face, &real))
     {
       printf("%-22s %lu:%02lu from now\r\n", "next chime",
@@ -294,7 +296,6 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   print_ns("phase error", cs.err_ns);
   print_ns("phase error (filtered)", cs.filt_err_ns);
   print_ns("command per swing", cs.cmd_ns_per_swing);
-  print_ns("hand offset target", cs.target_offset_ns);
   printf("%-22s %lld ppb  (%lld ms/day)\r\n", "pendulum drift",
          (long long)cs.drift_ppb, (long long)(cs.drift_ppb * 864ll / 10000ll));
   printf("%-22s %lld us per swing%s  (%lu events)\r\n", "feedforward",
@@ -663,14 +664,6 @@ static int control_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
-static int offset_cmd(int args, tinycl_parameter *tp, void *v)
-{
-  (void)args; (void)v;
-  control_set_offset_ns((int64_t)tp[0].ti.i * 1000000ll);
-  printf("hands target offset %d ms\r\n", tp[0].ti.i);
-  return 1;
-}
-
 /* Anything that changes the clock's rate or geometry has to ripple into
    the detector's windows and the loop's schedule. */
 static void reclock(void)
@@ -859,7 +852,7 @@ static int chime_cmd(int args, tinycl_parameter *tp, void *v)
       print_sod("  at true time", real);
     }
   }
-  printf("'chimeapply' to have the loop take it out, 'save' to keep it\r\n");
+  printf("'save' to keep it\r\n");
   return 1;
 }
 
@@ -881,15 +874,6 @@ static int chimeset_cmd(int args, tinycl_parameter *tp, void *v)
   cfg.chime_latency_ms = (uint32_t)tp[1].ti.i;
   printf("chimes every %lu min, press allowance %lu ms\r\n",
          (unsigned long)cfg.chime_interval_min, (unsigned long)cfg.chime_latency_ms);
-  return 1;
-}
-
-static int chimeapply_cmd(int args, tinycl_parameter *tp, void *v)
-{
-  (void)args; (void)tp; (void)v;
-  if (!chime_apply_to_loop()) { printf("nothing measured yet\r\n"); return 1; }
-  printf("loop asked to take out %ld ms; it slews at the SLEW limit\r\n",
-         (long)chime_offset_ms());
   return 1;
 }
 
@@ -1095,7 +1079,6 @@ static const tinycl_command tcmds[] =
   { "KICK",     "min_swings threshold_pct - hysteresis params, picks direction itself", kick_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "FORCEERR", "us - test only: seed uncorrected error to trigger KICK", forceerr_cmd, {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "CONTROL",  "y|n - close the loop",                control_cmd,  {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
-  { "OFFSET",   "ms - walk the hands by this much",       offset_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "BPH",      "beats_per_hour beats_per_swing",         bph_cmd,      {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "GEOMETRY", "events_per_swing drive_offset_ppt",      geometry_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "WINDOWS",  "rearm% min% max% of the interval", windows_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
@@ -1112,7 +1095,6 @@ static const tinycl_command tcmds[] =
   { "CHIME",    "hour minute - heard it strike, now",     chime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "CHIMESET", "interval_min press_allowance_ms",        chimeset_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "TZ",       "minutes from UTC (-300 = UTC-5)",        tz_cmd,       {TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "CHIMEAPPLY","hand the measured error to the loop",   chimeapply_cmd, {TINYCL_PARM_END} },
   { "AP",       "y|n - raise the setup access point",     ap_cmd,       {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "APKEY",    "password for the setup access point",    apkey_cmd,    {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "HOSTNAME", "name advertised over mdns",              hostname_cmd, {TINYCL_PARM_STR, TINYCL_PARM_END} },

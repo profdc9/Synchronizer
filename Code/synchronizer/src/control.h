@@ -84,7 +84,6 @@ typedef struct _control_stats
   uint8_t  rate_ready;        /* 1 once feedforward is being applied     */
   uint32_t pulses;
   uint32_t missed;            /* events the detector did not report      */
-  int64_t  target_offset_ns;  /* deliberate offset of the hands          */
   uint8_t  kick_active;       /* KICK mode: currently in the correcting
                                   phase, vs idle waiting to cross back    */
   uint8_t  kick_dir_retard;   /* KICK mode: which way THIS episode is
@@ -109,11 +108,6 @@ void control_reset(void);
    excursion.  The existing hold path re-acquires by itself once events
    resume.  Returns what it interrupted, so the diagnostic can say so. */
 control_state control_blind(void);
-
-/* Shift what the loop considers "on time", to walk the hands into
-   agreement without touching them.  Applied through the same rate limit as
-   everything else, so a large offset slews rather than jumps. */
-void control_set_offset_ns(int64_t offset_ns);
 
 /* Zero KICK mode's active/idle latch and since-last-kick counter.  Call
    whenever KICK's own parameters change: state built up under the old

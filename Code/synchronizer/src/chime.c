@@ -25,7 +25,6 @@
 #include "pico/stdlib.h"
 #include "config.h"
 #include "timebase.h"
-#include "control.h"
 #include "chime.h"
 
 #define DAY_S   86400
@@ -84,19 +83,36 @@ int32_t  chime_offset_ms(void)      { return cfg.chime_offset_ms; }
 uint64_t chime_marked_utc_ns(void)  { return cfg.chime_ref_utc * 1000000000ull; }
 void     chime_forget(void)         { cfg.chime_valid = 0u; cfg.chime_offset_ms = 0; }
 
-bool chime_next(uint32_t *seconds_away, uint32_t *face_sod, uint32_t *true_sod)
+/* What the hands should read RIGHT NOW, given the last chime mark and how
+   far off it found them - the same clock_sod chime_next() computes for
+   itself to find the next strike, exposed on its own so a caller can show
+   "the dial should currently say X" without needing the next-chime
+   machinery too. */
+bool chime_face_now_sod(uint32_t *face_sod)
 {
   uint32_t sod = chime_local_sod();
-  int32_t  interval, clock_sod, away;
+  int32_t  clock_sod;
 
   if (!cfg.chime_valid || sod == CHIME_SOD_UNKNOWN) return false;
 
-  interval = (int32_t)(cfg.chime_interval_min ? cfg.chime_interval_min : 60u) * 60;
-  if (interval <= 0) return false;
-
-  /* What the hands read at this moment. */
   clock_sod = ((int32_t)sod + cfg.chime_offset_ms / 1000) % DAY_S;
   if (clock_sod < 0) clock_sod += DAY_S;
+
+  if (face_sod) *face_sod = (uint32_t)clock_sod;
+  return true;
+}
+
+bool chime_next(uint32_t *seconds_away, uint32_t *face_sod, uint32_t *true_sod)
+{
+  uint32_t sod = chime_local_sod();
+  uint32_t clock_sod_u;
+  int32_t  interval, clock_sod, away;
+
+  if (!chime_face_now_sod(&clock_sod_u)) return false;
+  clock_sod = (int32_t)clock_sod_u;
+
+  interval = (int32_t)(cfg.chime_interval_min ? cfg.chime_interval_min : 60u) * 60;
+  if (interval <= 0) return false;
 
   away = interval - (clock_sod % interval);
   if (away <= 0) away += interval;
@@ -104,16 +120,5 @@ bool chime_next(uint32_t *seconds_away, uint32_t *face_sod, uint32_t *true_sod)
   if (seconds_away) *seconds_away = (uint32_t)away;
   if (face_sod)     *face_sod     = (uint32_t)((clock_sod + away) % DAY_S);
   if (true_sod)     *true_sod     = (uint32_t)(((int32_t)sod + away) % DAY_S);
-  return true;
-}
-
-bool chime_apply_to_loop(void)
-{
-  if (!cfg.chime_valid) return false;
-
-  /* A positive offset means the hands are ahead, and the loop takes a
-     positive target offset to mean "each swing should land later", which
-     holds the hands back.  So the sign passes straight through. */
-  control_set_offset_ns((int64_t)cfg.chime_offset_ms * 1000000ll);
   return true;
 }
