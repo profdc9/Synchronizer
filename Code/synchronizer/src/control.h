@@ -48,14 +48,12 @@ extern "C" {
 
    How it corrects
    ---------------
-   A PI controller on that error asks for a number of nanoseconds to be
-   added to each swing.  That number is tiny - on the development clock,
-   cancelling 11 s/day needs 113 microseconds of retard per swing - far too
-   small to deliver as a pulse every swing.  So the demand is accumulated in a credit and spent whole:
-   when the credit reaches the measured phase authority of one pulse, one
-   pulse is fired and the credit is reduced by what it bought.  That makes
-   the actuator a first-order sigma-delta, which is exactly the right shape
-   for a quantised effector driving a high-Q oscillator.
+   KICK is a bang-bang hysteresis scheme, not a PI controller: no gain to
+   tune and no pulse authority to measure first.  It waits until the
+   schedule error (sched_err_ns in control.c) crosses a threshold, then
+   fires a pulse every kick_min_swings events - advancing or retarding,
+   whichever the threshold it crossed calls for - until the error is back
+   past zero.  See kick_step()'s comment in control.c for the details.
 
    Where the pulse goes
    --------------------
@@ -70,8 +68,7 @@ typedef enum
   CTRL_IDLE = 0,    /* switched off                                      */
   CTRL_ACQUIRE,     /* waiting for a timebase and a run of clean events   */
   CTRL_TRACK,       /* locked and correcting                              */
-  CTRL_HOLD,        /* lost events or lost time; actuator quiet           */
-  CTRL_MEASURE      /* measuring the phase authority of one pulse         */
+  CTRL_HOLD         /* lost events or lost time; actuator quiet           */
 } control_state;
 
 typedef struct _control_stats
@@ -81,7 +78,6 @@ typedef struct _control_stats
   int64_t  err_ns;            /* latest phase error                      */
   int64_t  filt_err_ns;       /* smoothed, for display                   */
   int64_t  cmd_ns_per_swing;  /* current controller output               */
-  int64_t  credit_ns;         /* undelivered correction                  */
   int64_t  drift_ppb;         /* measured pendulum error vs nominal      */
   int64_t  ff_ns;             /* feedforward part of the command         */
   uint32_t rate_n;            /* events the rate tracker has seen        */
@@ -98,8 +94,8 @@ typedef struct _control_stats
                                   diagnostic only, not what fires anything */
   int64_t  kick_accum_ns;     /* KICK mode: running sum of kick_filt_ns -
                                   also diagnostic only, see sched_err_ns   */
-  int64_t  sched_err_ns;      /* rate_ns - nominal_ns: what KICK's
-                                  hysteresis actually reacts to now        */
+  int64_t  sched_err_ns;      /* fast-smoothed ev->utc_ns - nominal_ns:
+                                  what KICK's hysteresis reacts to         */
 } control_stats;
 
 void control_init(void);
@@ -110,10 +106,8 @@ void control_reset(void);
 
 /* The ADC is about to be taken away for a diagnostic, so events will stop
    arriving.  Drop to hold rather than let the silence be read as a phase
-   excursion, and abandon any authority measurement in flight, since one
-   spanning a blind stretch is meaningless.  The existing hold path
-   re-acquires by itself once events resume.  Returns what it interrupted,
-   so the diagnostic can say so. */
+   excursion.  The existing hold path re-acquires by itself once events
+   resume.  Returns what it interrupted, so the diagnostic can say so. */
 control_state control_blind(void);
 
 /* Shift what the loop considers "on time", to walk the hands into
@@ -121,16 +115,10 @@ control_state control_blind(void);
    everything else, so a large offset slews rather than jumps. */
 void control_set_offset_ns(int64_t offset_ns);
 
-/* Zero the pending correction credit (and the PI integrator that feeds it),
-   and KICK mode's active/idle latch and since-last-kick counter.  Call
-   whenever AUTH changes: the old backlog was priced under the old
-   authority - possibly no authority at all, in which case it should never
-   have been allowed to grow in the first place - and spending it under the
-   new price would dump however many pulses it takes to burn it off onto
-   the actuator all at once.  Also call it whenever LOOPMODE or KICK's own
-   parameters change, for the same reason: state built up under the old
+/* Zero KICK mode's active/idle latch and since-last-kick counter.  Call
+   whenever KICK's own parameters change: state built up under the old
    settings should not carry over into the new ones. */
-void control_clear_credit(void);
+void control_kick_reset(void);
 
 /* Test only: seed sched_err_ns ("uncorrected error") directly, so KICK's
    hysteresis reacts to it on the very next tracked event instead of
@@ -141,24 +129,6 @@ void control_clear_credit(void);
    pace, same as any other sample fed into that EMA. */
 void control_force_sched_err_ns(int64_t ns);
 
-/* Fire one pulse per event for n events and report the phase step, which
-   is the loop gain.  Run this with the loop switched off. */
-bool control_measure_authority(uint32_t swings, bool retard);
-
-/* Sweep where the pulse sits and measure the authority at each placement.
-   The turning point is a NULL for an attract-only coil mounted behind the
-   swing - with the bob directly in front the pull is purely into the case
-   and none of it is along the travel - so authority peaks some way either
-   side and 40 ms is only a guess.  This runs MEASURE at each of `steps`
-   placements between lo_us and hi_us, settling in between, and prints a
-   table.  The original placement is restored at the end.
-
-   lo_us/hi_us are signed and can range across a full half period in
-   either direction now - see the pulse_advance_us/pulse_retard_us comment
-   in config.h - so lo_us may be negative. */
-bool control_ptime_scan(bool retard, int32_t lo_us, int32_t hi_us,
-                        uint32_t steps, uint32_t swings);
-
 const char *control_state_name(control_state s);
 
 /* Echo every detected swing to the console as it is processed.  Events are
@@ -167,9 +137,8 @@ void control_set_echo(bool on);
 bool control_echo(void);
 
 /* A periodic one-line summary instead of WATCH's per-event flood: phase
-   error and how many corrective pulses (AUTH spends or KICK kicks,
-   whichever mode is running) fired since the previous line, once every
-   `secs` seconds.  0 turns it off. */
+   error and how many corrective pulses KICK fired since the previous
+   line, once every `secs` seconds.  0 turns it off. */
 void control_set_phaselog(uint32_t secs);
 uint32_t control_phaselog(void);
 

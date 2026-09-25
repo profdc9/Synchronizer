@@ -7,14 +7,14 @@
 #   make check    the whole battery
 #
 CFLAGS = -O1 -Wall -Wextra -I. -I../src
-all: authority
+all: kick
 
-authority: authority.c stubs.c ../src/control.c board.h pico/stdlib.h
-	$(CC) $(CFLAGS) -o $@ authority.c stubs.c ../src/control.c -lm
+kick: kick.c stubs.c ../src/control.c board.h pico/stdlib.h
+	$(CC) $(CFLAGS) -o $@ kick.c stubs.c ../src/control.c -lm
 
-check: authority
+check: kick
 	@./check.sh
 
 clean:
-	rm -f authority
+	rm -f kick authority
 .PHONY: all check clean

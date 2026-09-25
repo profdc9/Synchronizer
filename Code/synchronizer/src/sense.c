@@ -363,7 +363,6 @@ const char *sense_diag_interrupted(void)
 {
   return (diag_was == CTRL_TRACK)   ? "the loop was tracking and is now holding"
        : (diag_was == CTRL_ACQUIRE) ? "the loop was acquiring and must start over"
-       : (diag_was == CTRL_MEASURE) ? "an authority measurement was abandoned"
        : NULL;
 }
 

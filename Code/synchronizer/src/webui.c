@@ -175,10 +175,9 @@ static uint32_t json_status(char *b, uint32_t n)
 
   u += (uint32_t)snprintf(b + u, n - u,
     "\"drive\":{\"on\":%d,\"pw\":%u,\"adv\":%ld,\"ret\":%ld,"
-      "\"authadv\":%ld,\"authret\":%ld,"
       "\"pulses\":%lu,\"refused\":%lu,\"budget\":%lu},",
     drive_is_on() ? 1 : 0, cfg.pulse_us, (long)cfg.pulse_advance_us,
-    (long)cfg.pulse_retard_us, (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns,
+    (long)cfg.pulse_retard_us,
     (unsigned long)drive_pulse_count(), (unsigned long)drive_refused_count(),
     (unsigned long)drive_budget_us());
 
@@ -193,17 +192,17 @@ static uint32_t json_status(char *b, uint32_t n)
     (long long)(tb_last_offset_ns() / 1000), (long)(cfg.tz_offset_s / 60));
 
   u += (uint32_t)snprintf(b + u, n - u,
-    "\"loop\":{\"state\":\"%s\",\"on\":%d,\"act\":%d,\"mode\":%d,"
+    "\"loop\":{\"state\":\"%s\",\"on\":%d,\"act\":%d,"
       "\"kickact\":%d,\"kicksince\":%lu,\"kickn\":%u,\"kickdir\":%d,"
       "\"kickthr\":%u,"
       "\"kickfilt_us\":%lld,\"kickaccum_us\":%lld,\"diff_us\":%lld,"
       "\"schederr_us\":%lld,"
       "\"events\":%llu,\"missed\":%lu,"
-      "\"err_us\":%lld,\"filt_us\":%lld,\"cmd_ns\":%lld,\"credit_ns\":%lld,"
+      "\"err_us\":%lld,\"filt_us\":%lld,\"cmd_ns\":%lld,"
       "\"drift_ppb\":%lld,\"offset_ms\":%lld,"
       "\"kp\":%lu,\"ki\":%lu,\"slew\":%ld},",
     control_state_name(cs.state), cfg.control_enabled ? 1 : 0,
-    control_actuator() ? 1 : 0, cfg.control_mode,
+    control_actuator() ? 1 : 0,
     cs.kick_active ? 1 : 0, (unsigned long)cs.kick_since,
     (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u), cs.kick_dir_retard,
     (unsigned)(cfg.kick_threshold_pct ? cfg.kick_threshold_pct : 25u),
@@ -212,7 +211,7 @@ static uint32_t json_status(char *b, uint32_t n)
     (long long)(cs.sched_err_ns / 1000),
     (unsigned long long)cs.events, (unsigned long)cs.missed,
     (long long)(cs.err_ns / 1000), (long long)(cs.filt_err_ns / 1000),
-    (long long)cs.cmd_ns_per_swing, (long long)cs.credit_ns,
+    (long long)cs.cmd_ns_per_swing,
     (long long)cs.drift_ppb, (long long)(cs.target_offset_ns / 1000000),
     (unsigned long)cfg.kp_swings, (unsigned long)cfg.ki_swings,
     (long)cfg.slew_limit_ppm);
@@ -338,8 +337,6 @@ static bool apply_config(const char *q)
   if (set_u32(q, "kp",     &t, 1u, 1000000u))  { cfg.kp_swings = t;              touched = true; }
   if (set_u32(q, "ki",     &t, 1u, 1000000u))  { cfg.ki_swings = t;              touched = true; }
   if (set_u32(q, "slew",   &t, 1u, 100000u))   { cfg.slew_limit_ppm = (int32_t)t;    touched = true; }
-  if (set_u32(q, "mode",   &t, 0u, 1u))
-    { cfg.control_mode = (uint8_t)t; touched = true; control_clear_credit(); }
   if (set_u32(q, "kickn",  &t, 1u, 2000u))     { cfg.kick_min_swings = (uint16_t)t; touched = true; }
   if (set_u32(q, "kickthr",&t, 1u, 49u))       { cfg.kick_threshold_pct = (uint16_t)t; touched = true; }
   if (set_u32(q, "cint",   &t, 1u, 720u))      { cfg.chime_interval_min = t;      touched = true; }
@@ -354,10 +351,6 @@ static bool apply_config(const char *q)
     char v[24];
     if (http_query_get(q, "duty", v, sizeof(v)))
     { sense_set_drive_ns((uint32_t)strtol(v, NULL, 10)); touched = true; }
-    if (http_query_get(q, "authadv", v, sizeof(v)))
-    { cfg.auth_advance_ns = (int32_t)strtol(v, NULL, 10); touched = true; }
-    if (http_query_get(q, "authret", v, sizeof(v)))
-    { cfg.auth_retard_ns  = (int32_t)strtol(v, NULL, 10); touched = true; }
   }
   {
     char h[CONFIG_NAME_LEN];
@@ -547,13 +540,6 @@ void http_dispatch(const char *method, const char *path, const char *query,
       chime_apply_to_loop();
     else if (strcmp(act, "chimeforget") == 0)
       chime_forget();
-    else if (strcmp(act, "measure") == 0)
-    {
-      if (!control_measure_authority((uint32_t)http_query_int(query, "n", 20),
-                                     http_query_int(query, "retard", 1) != 0))
-      { reply_lit(out, 503, "application/json",
-            "{\"err\":\"loop must be tracking\"}"); return; }
-    }
     else if (strcmp(act, "resonance") == 0)
     {
       if (job != JOB_NONE)

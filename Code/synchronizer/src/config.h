@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  19u
+#define CONFIG_VERSION  20u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -161,23 +161,22 @@ typedef struct _synchronizer_config
      correction it never delivered. */
   int32_t  pulse_advance_us;
   int32_t  pulse_retard_us;
-  int32_t  auth_advance_ns;     /* measured phase step of an advance pulse */
-  int32_t  auth_retard_ns;      /* measured phase step of a retard pulse   */
 
-  /* --- control loop ----------------------------------------------- */
+  /* --- control loop -----------------------------------------------
+     KICK is the only algorithm now - a bang-bang hysteresis scheme that
+     needs no measured authority at all; see kick_min_swings/
+     kick_threshold_pct below and the kick_step() comment in control.c.
+     It picks advance or retard itself, at runtime, from which threshold
+     it hit.  The AUTH mode this used to select against (spend the phase
+     error against a measured ns-per-pulse price from MEASURE/PTIMESCAN)
+     and the mode selector itself were removed once KICK proved out -
+     see git history if that measured-authority path is ever wanted
+     back. */
   uint8_t  control_enabled;
-  /* Which algorithm turns phase error into pulses while CONTROL is on.
-       0 = AUTH: spend the phase error against a measured ns-per-pulse
-           price (auth_advance_ns/auth_retard_ns below) - needs MEASURE or
-           PTIMESCAN run first, but once priced it can spend either
-           direction as needed.
-       1 = KICK: a bang-bang hysteresis scheme that needs no measured
-           authority at all - see kick_min_swings/kick_threshold_pct
-           below and the kick_step() comment in control.c.  It picks
-           advance or retard itself, at runtime, from which threshold it
-           hit - there is no direction to configure here any more.  This
-           is the default: it works with nothing calibrated yet. */
-  uint8_t  control_mode;
+  uint8_t  pad_mode;            /* was control_mode (AUTH/KICK select);
+                                    unused now that KICK is the only
+                                    algorithm - left in place rather than
+                                    reshuffling the layout             */
   uint8_t  pad_kickdir;         /* was a KICK direction setting; the
                                     controller now picks direction itself,
                                     so this is unused - left in place

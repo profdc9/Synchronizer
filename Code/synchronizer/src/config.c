@@ -173,8 +173,6 @@ void config_defaults(void)
   cfg.pulse_us           = 2000u;
   cfg.pulse_advance_us   = 40000u;
   cfg.pulse_retard_us    = 40000u;
-  cfg.auth_advance_ns = 0;        /* both unknown until MEASURE is run     */
-  cfg.auth_retard_ns  = 0;
 
   cfg.chime_interval_min = 60u;   /* on the hour                        */
   cfg.chime_offset_ms    = 0;
@@ -183,7 +181,6 @@ void config_defaults(void)
   cfg.chime_valid        = 0u;
 
   cfg.control_enabled = 0u;       /* never runs until it is switched on    */
-  cfg.control_mode    = 1u;       /* KICK: no authority measurement needed */
   cfg.kick_min_swings  = 5u;
   cfg.kick_threshold_pct = 25u;    /* a quarter swing                     */
   cfg.kp_swings       = 4200u;    /* one hour of swings                  */

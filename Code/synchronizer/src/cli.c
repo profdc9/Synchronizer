@@ -192,14 +192,6 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   printf("%-22s %s\r\n", "coil", drive_is_on() ? "ON" : "off");
   printf("%-22s %u us wide, %ld us advance, %ld us retard\r\n", "pulse",
          cfg.pulse_us, (long)cfg.pulse_advance_us, (long)cfg.pulse_retard_us);
-  printf("%-22s advance %ld ns, retard %ld ns\r\n", "authority",
-         (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns);
-  if (!cfg.auth_advance_ns && !cfg.auth_retard_ns)
-    printf("%-22s neither measured - loop cannot act\r\n", "");
-  else if (!cfg.auth_advance_ns)
-    printf("%-22s advance not measured - can only slow the clock\r\n", "");
-  else if (!cfg.auth_retard_ns)
-    printf("%-22s retard not measured - can only speed the clock\r\n", "");
   printf("%-22s %lu fired, %lu refused, %lu us budget\r\n", "pulses",
          (unsigned long)drive_pulse_count(), (unsigned long)drive_refused_count(),
          (unsigned long)drive_budget_us());
@@ -258,9 +250,6 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("\r\n-- loop -------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "state", control_state_name(cs.state));
-  printf("%-22s %s\r\n", "mode",
-         cfg.control_mode ? "KICK - hysteresis, no measured authority"
-                           : "AUTH - spends measured pulse authority");
   if (!control_actuator())
     printf("%-22s muted - tracking continues, no pulses will fire\r\n", "actuator");
   /* A fast-smoothed comparison against a plain, never-adapting nominal
@@ -269,19 +258,17 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
      converge to zero just because the tracker has learned to predict a
      wrong rate, and unlike routing it through the tracking NCO, it
      notices a real correction working within a few events instead of
-     days.  Computed either way, not just under KICK - AUTH mode never
-     looks at it, but it is still the honest answer to "how wrong does
-     the device think the clock is right now". */
+     days - it is the honest answer to "how wrong does the device think
+     the clock is right now". */
   printf("%-22s %lld us\r\n", "uncorrected error",
          (long long)(cs.sched_err_ns / 1000));
-  if (cfg.control_mode)
-    printf("%-22s %s, %u since last kick (min %u), trips at +-%u%%\r\n",
-           "kick",
-           cs.kick_active ? (cs.kick_dir_retard ? "retarding" : "advancing")
-                          : "idle",
-           (unsigned)cs.kick_since,
-           (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u),
-           (unsigned)(cfg.kick_threshold_pct ? cfg.kick_threshold_pct : 25u));
+  printf("%-22s %s, %u since last kick (min %u), trips at +-%u%%\r\n",
+         "kick",
+         cs.kick_active ? (cs.kick_dir_retard ? "retarding" : "advancing")
+                        : "idle",
+         (unsigned)cs.kick_since,
+         (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u),
+         (unsigned)(cfg.kick_threshold_pct ? cfg.kick_threshold_pct : 25u));
   /* err_ns/filt_err_ns (edge-based, rerr) and kick_filt_ns (phase-based,
      demod_ns) have opposite sign conventions - negate the former so both
      read "positive = hands ahead, wants retarding" before comparing. */
@@ -292,7 +279,6 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   print_ns("phase error", cs.err_ns);
   print_ns("phase error (filtered)", cs.filt_err_ns);
   print_ns("command per swing", cs.cmd_ns_per_swing);
-  print_ns("undelivered credit", cs.credit_ns);
   print_ns("hand offset target", cs.target_offset_ns);
   printf("%-22s %lld ppb  (%lld ms/day)\r\n", "pendulum drift",
          (long long)cs.drift_ppb, (long long)(cs.drift_ppb * 864ll / 10000ll));
@@ -534,36 +520,12 @@ static int ptime_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
-static int auth_cmd(int args, tinycl_parameter *tp, void *v)
-{
-  (void)args; (void)v;
-  cfg.auth_advance_ns = (int32_t)tp[0].ti.i;
-  cfg.auth_retard_ns  = (int32_t)tp[1].ti.i;
-  control_clear_credit();
-  printf("authority: advance %ld ns, retard %ld ns per pulse\r\n",
-         (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns);
-  return 1;
-}
-
-static int loopmode_cmd(int args, tinycl_parameter *tp, void *v)
-{
-  (void)args; (void)v;
-  if      (strcmp(tp[0].ts.str, "AUTH") == 0) cfg.control_mode = 0u;
-  else if (strcmp(tp[0].ts.str, "KICK") == 0) cfg.control_mode = 1u;
-  else { printf("mode must be AUTH or KICK\r\n"); return 1; }
-  control_clear_credit();
-  printf("loop mode: %s\r\n", cfg.control_mode
-         ? "KICK - hysteresis, no measured authority needed"
-         : "AUTH - spends measured pulse authority");
-  return 1;
-}
-
 static int kick_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
   cfg.kick_min_swings    = (uint16_t)tp[0].ti.i;
   cfg.kick_threshold_pct = (uint16_t)tp[1].ti.i;
-  control_clear_credit();
+  control_kick_reset();
   printf("kick: minimum %u swings between pulses, trips at +-%u%% of a"
          " swing - picks advance or retard itself\r\n",
          (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u),
@@ -669,23 +631,6 @@ static int drive_cmd(int args, tinycl_parameter *tp, void *v)
            (unsigned long)sense_drive_level(),
            (unsigned long)(sense_drive_level()
                            ? sense_drive_actual_ns() / sense_drive_level() : 0u));
-  return 1;
-}
-
-static int measure_cmd(int args, tinycl_parameter *tp, void *v)
-{
-  (void)args; (void)v;
-  control_measure_authority((uint32_t)tp[0].ti.i, tp[1].tb.b);
-  return 1;
-}
-
-static int ptimescan_cmd(int args, tinycl_parameter *tp, void *v)
-{
-  (void)args; (void)v;
-  if (!control_ptime_scan(tp[0].tb.b, (int32_t)tp[1].ti.i,
-                          (int32_t)tp[2].ti.i, (uint32_t)tp[3].ti.i,
-                          (uint32_t)tp[4].ti.i))
-    printf("needs the loop tracking, and lo < hi, both within +-half a period\r\n");
   return 1;
 }
 
@@ -1055,8 +1000,9 @@ static int recreate_cmd(int args, tinycl_parameter *tp, void *v)
   printf("PW %lu\r\n", (unsigned long)cfg.pulse_us);
   printf("PTIME %ld %ld\r\n",
          (long)cfg.pulse_advance_us, (long)cfg.pulse_retard_us);
-  printf("AUTH %ld %ld\r\n",
-         (long)cfg.auth_advance_ns, (long)cfg.auth_retard_ns);
+  printf("KICK %u %u\r\n",
+         (unsigned)(cfg.kick_min_swings ? cfg.kick_min_swings : 5u),
+         (unsigned)(cfg.kick_threshold_pct ? cfg.kick_threshold_pct : 25u));
   printf("RATEKP %lu\r\n", (unsigned long)cfg.rate_kp_events);
   printf("NTPKP %lu\r\n", (unsigned long)cfg.tb_kp_fixes);
   printf("GAINS %lu %lu\r\n",
@@ -1123,13 +1069,8 @@ static const tinycl_command tcmds[] =
   { "COILTEST", "ms YES - hold the coil on to feel it pull; once per boot", coiltest_cmd, {TINYCL_PARM_INT, TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "PW",       "us - correction pulse width",            pw_cmd,       {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "PTIME",    "advance_us retard_us - pulse placing",   ptime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "AUTH",     "advance_ns retard_ns - step one pulse buys", auth_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "LOOPMODE", "AUTH|KICK - which algorithm CONTROL uses", loopmode_cmd, {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "KICK",     "min_swings threshold_pct - hysteresis params, picks direction itself", kick_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "FORCEERR", "us - test only: seed uncorrected error to trigger KICK", forceerr_cmd, {TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "MEASURE",  "pulses retard(y|n) - authority, takes 3x that many swings", measure_cmd,  {TINYCL_PARM_INT, TINYCL_PARM_BOOL, TINYCL_PARM_END} },
-  { "PTIMESCAN","retard(y|n) lo hi steps swings - sweep placement", ptimescan_cmd,
-                {TINYCL_PARM_BOOL, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "CONTROL",  "y|n - close the loop",                control_cmd,  {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "OFFSET",   "ms - walk the hands by this much",       offset_cmd,   {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "BPH",      "beats_per_hour beats_per_swing",         bph_cmd,      {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },

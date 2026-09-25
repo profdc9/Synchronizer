@@ -58,10 +58,7 @@ reloading. <button onclick="location.reload(true)">Reload</button></div>
 <table>
 <tr><td class="k">state</td><td class="v"><span id="lstate" class="pill">-</span></td></tr>
 <tr><td class="k">uncorrected error</td><td class="v"><span id="lschederr">-</span> us</td></tr>
-<tr><td class="k">mode</td><td class="v">
-<select id="mode" onchange="cfg('mode')"><option value="1">kick (hysteresis)</option><option value="0">auth (measured)</option></select>
-</td></tr>
-<tr id="kickrow1"><td class="k">kick</td><td class="v"><span id="lkick" class="pill">-</span>
+<tr><td class="k">kick</td><td class="v"><span id="lkick" class="pill">-</span>
  <span id="lkicksince">-</span> since last (min <span id="lkickn2">-</span>)</td></tr>
 <tr id="mutedrow"><td class="k">actuator</td><td class="v"><span class="pill bad">muted</span>
  - tracking continues, no pulses will fire</td></tr>
@@ -69,7 +66,6 @@ reloading. <button onclick="location.reload(true)">Reload</button></div>
 <tr><td class="k">smoothed</td><td class="v"><span id="lfilt">-</span> us</td></tr>
 <tr><td class="k">events</td><td class="v"><span id="lev">-</span></td></tr>
 <tr><td class="k">pendulum drift</td><td class="v"><span id="ldrift">-</span> ppb</td></tr>
-<tr id="authrow1"><td class="k">credit</td><td class="v"><span id="lcred">-</span> ns</td></tr>
 <tr><td class="k">hand offset</td><td class="v"><span id="loff">-</span> ms</td></tr>
 </table>
 <div class="row"><button id="ctlbtn" class="p">-</button>
@@ -158,8 +154,6 @@ leave it at 0 unless you want to correct for your own reaction.</div>
 <section><h2>Drive</h2>
 <table>
 <tr><td class="k">coil</td><td class="v"><span id="don" class="pill">-</span></td></tr>
-<tr><td class="k">authority adv</td><td class="v"><span id="dautha">-</span></td></tr>
-<tr><td class="k">authority ret</td><td class="v"><span id="dauthr">-</span></td></tr>
 <tr><td class="k">pulses</td><td class="v"><span id="dp">-</span></td></tr>
 <tr><td class="k">duty budget</td><td class="v"><span id="dbud">-</span> us</td></tr>
 </table>
@@ -169,15 +163,10 @@ leave it at 0 unless you want to correct for your own reaction.</div>
 <button onclick="cfg('pw,adv,ret')">Apply</button></div>
 <div class="row"><button onclick="act('pulse&us='+v('pw'))">Test pulse</button>
 <button onclick="act('coiloff')">Coil off</button></div>
-<div class="row"><label>auth ns</label><input id="authadv" style="width:82px">
-<label style="min-width:28px">ret</label><input id="authret" style="width:82px">
-<button onclick="cfg('authadv,authret')">Apply</button></div>
-<div class="row"><button onclick="act('measure&n=20&retard=0')">Measure advance</button>
-<button onclick="act('measure&n=20&retard=1')">Measure retard</button></div>
-<div class="note">Measure needs the loop tracking, and measures one direction at a time.
-The two are not equal &mdash; an attract-only coil retards far more strongly than it
-advances &mdash; so measure both, or leave the weak one at zero and let the loop correct
-in one direction only. Start with a narrow pulse and work up.</div>
+<div class="note">The two placements are not equal &mdash; an attract-only coil retards
+far more strongly than it advances. Use <code>FORCEERR</code> on the console to trigger
+KICK on demand and watch which way a placement actually moves the clock. Start with a
+narrow pulse and work up.</div>
 </section>
 
 <section><h2>Time</h2>
@@ -230,13 +219,10 @@ from here is visible to anyone watching it.</p>
 <option value="PHASELOG 60"><option value="PHASELOG 0">
 <option value="ACTUATOR N"><option value="ACTUATOR Y">
 <option value="CAPTURE 500000 256"><option value="WATCH Y"><option value="WATCH N">
-<option value="MEASURE 60 Y"><option value="MEASURE 60 N"><option value="MEASURE 200 Y">
-<option value="PTIMESCAN Y 10000 60000 5 60"><option value="PTIMESCAN N 10000 60000 5 60">
 <option value="CONTROL Y"><option value="CONTROL N">
 <option value="PULSE 2000"><option value="COILOFF"><option value="COILTEST 3000 YES"><option value="SAVE">
-<option value="AUTH 0 4200000"><option value="RATEKP 350"><option value="FILTER 16 4 12">
-<option value="LOOPMODE KICK"><option value="LOOPMODE AUTH">
-<option value="KICK 5 25">
+<option value="RATEKP 350"><option value="FILTER 16 4 12">
+<option value="KICK 5 25"><option value="FORCEERR 30000">
 <option value="HYST 30"><option value="PTIME 20000 20000">
 </datalist>
 <pre id="out">Nothing run yet.</pre>
@@ -386,11 +372,7 @@ function poll(){var mySeq=++pollSeq;
  var b=$('ctlbtn');b.textContent=L.on?'Stop loop':'Start loop';
  b.onclick=function(){act('control&on='+(L.on?0:1))};
  fld('kp',L.kp);fld('ki',L.ki);fld('slew',L.slew);
- fld('mode',L.mode);fld('kickn',L.kickn);fld('kickthr',L.kickthr);
- var kickon=(L.mode==1);
- $('kickrow1').style.display=kickon?'':'none';
- $('kickrow2').style.display=kickon?'':'none';
- $('authrow1').style.display=kickon?'none':'';
+ fld('kickn',L.kickn);fld('kickthr',L.kickthr);
  var ke=$('lkick');
  ke.textContent=L.kickact?(L.kickdir?'retarding':'advancing'):'idle';
  ke.className='pill '+(L.kickact?'on':'off');
@@ -419,12 +401,9 @@ function poll(){var mySeq=++pollSeq;
 
  var D=d.drive,de=$('don');de.textContent=D.on?'ENERGISED':'off';
  de.className='pill '+(D.on?'bad':'off');
- t('dautha',D.authadv?num(D.authadv)+' ns/pulse':'not measured');
- t('dauthr',D.authret?num(D.authret)+' ns/pulse':'not measured');
  t('dp',num(D.pulses)+(D.refused?' ('+D.refused+' refused)':''));
  t('dbud',num(D.budget));
  fld('pw',D.pw);fld('adv',D.adv);fld('ret',D.ret);
- fld('authadv',D.authadv);fld('authret',D.authret);
 
  var C2=d.chime;
  if(C2.have){var o=C2.offset_ms/1000;
