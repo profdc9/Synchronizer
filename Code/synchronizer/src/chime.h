@@ -55,11 +55,15 @@ extern "C" {
 
 void chime_init(void);
 
-/* Record a chime heard now, for the clock-face time face_hour:face_min.
-   An hour of 1..12 is taken as whichever of the two daily possibilities is
-   nearer the truth, so a 12-hour dial needs no am/pm.  False if the
+/* Record a chime heard now, for the clock-face time
+   face_hour:face_min:face_sec.  An hour of 1..12 is taken as whichever of
+   the two daily possibilities is nearer the truth, so a 12-hour dial needs
+   no am/pm.  The seconds matter here more than they do reading an ordinary
+   dial: chime_strike_offset_s (config.h) is only as accurate as this mark
+   is, and a striking train a minute or so off the hour makes every whole
+   second of rounding here a real fraction of that offset.  False if the
    timebase has no idea what time it is yet. */
-bool chime_mark(uint32_t face_hour, uint32_t face_min);
+bool chime_mark(uint32_t face_hour, uint32_t face_min, uint32_t face_sec);
 
 bool    chime_have(void);
 int32_t chime_offset_ms(void);     /* hands ahead of true local time */

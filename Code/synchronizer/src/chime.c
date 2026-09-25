@@ -51,7 +51,7 @@ static int32_t wrap_half_day(int32_t d)
   return d;
 }
 
-bool chime_mark(uint32_t face_hour, uint32_t face_min)
+bool chime_mark(uint32_t face_hour, uint32_t face_min, uint32_t face_sec)
 {
   uint32_t sod = chime_local_sod();
   int32_t  best = 0;
@@ -59,7 +59,7 @@ bool chime_mark(uint32_t face_hour, uint32_t face_min)
   uint32_t i;
 
   if (sod == CHIME_SOD_UNKNOWN) return false;
-  if (face_hour > 23u || face_min > 59u) return false;
+  if (face_hour > 23u || face_min > 59u || face_sec > 59u) return false;
 
   /* A dial marked 1 to 12 cannot say which half of the day it means, so try
      both and keep whichever puts the clock nearer the truth.  An hour given
@@ -67,7 +67,8 @@ bool chime_mark(uint32_t face_hour, uint32_t face_min)
   for (i = 0; i < 2u; i++)
   {
     uint32_t h = (face_hour + 12u * i) % 24u;
-    int32_t  d = wrap_half_day((int32_t)(h * 3600u + face_min * 60u) - (int32_t)sod);
+    int32_t  d = wrap_half_day((int32_t)(h * 3600u + face_min * 60u + face_sec)
+                                - (int32_t)sod);
     if (!have_best || abs(d) < abs(best)) { best = d; have_best = true; }
   }
 

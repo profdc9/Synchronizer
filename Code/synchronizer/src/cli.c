@@ -837,7 +837,7 @@ static int hostname_cmd(int args, tinycl_parameter *tp, void *v)
 static int chime_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
-  if (!chime_mark((uint32_t)tp[0].ti.i, (uint32_t)tp[1].ti.i))
+  if (!chime_mark((uint32_t)tp[0].ti.i, (uint32_t)tp[1].ti.i, (uint32_t)tp[2].ti.i))
   {
     printf("no time yet - the clock cannot be placed against UTC until NTP has a fix\r\n");
     return 1;
@@ -1110,7 +1110,7 @@ static const tinycl_command tcmds[] =
   { "NTP",      "hostname",                               ntp_cmd,      {TINYCL_PARM_STR, TINYCL_PARM_END} },
   { "SYNC",     "ask for an NTP exchange now",            sync_cmd,     {TINYCL_PARM_END} },
   { "NET",      "interfaces, servers and their counters",  net_cmd,      {TINYCL_PARM_END} },
-  { "CHIME",    "hour minute - heard it strike, now",     chime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "CHIME",    "hour minute second - heard it strike, now", chime_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "CHIMESET", "interval_min press_allowance_ms strike_offset_s", chimeset_cmd,
                 {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "TZ",       "minutes from UTC (-300 = UTC-5)",        tz_cmd,       {TINYCL_PARM_INT, TINYCL_PARM_END} },

@@ -102,10 +102,13 @@ reloading. <button onclick="location.reload(true)">Reload</button></div>
 </section>
 
 <section><h2>Chime</h2>
-<p class="note" style="margin:0 0 10px">Set the hour the clock is about to strike, then press the button the
-moment you hear it. That is what tells the device where the hands actually are.</p>
+<p class="note" style="margin:0 0 10px">Set what the hands actually show at the moment the chime goes off,
+then press the button right then. Read it straight off the dial, seconds included &mdash; if this
+clock rings a bit before or after the hour, that's exactly what belongs here, not the nearest
+round hour.</p>
 <div class="row"><label>about to strike</label>
 <input id="ch" style="width:52px" placeholder="3">:<input id="cm" style="width:52px" value="00">
+:<input id="cs" style="width:52px" value="00">
 <span class="note" style="margin:0">clock face, 1&ndash;12 is fine</span></div>
 <div class="big-row"><button class="p big" onclick="heard()">Heard it &mdash; now</button></div>
 <table style="margin-top:12px">
@@ -505,9 +508,9 @@ function hhmm(s){if(s===null||s===undefined)return '-';
  return (h<10?'0':'')+h+':'+(m<10?'0':'')+m+':'+(x<10?'0':'')+x}
 
 function heard(){
- var h=parseInt($('ch').value,10),m=parseInt($('cm').value,10)||0;
+ var h=parseInt($('ch').value,10),m=parseInt($('cm').value,10)||0,s=parseInt($('cs').value,10)||0;
  if(isNaN(h)){say2('Enter the hour it is about to strike.');return}
- post('/api/chime?h='+h+'&m='+m).then(function(d){
+ post('/api/chime?h='+h+'&m='+m+'&s='+s).then(function(d){
   if(d&&d.ok===false)say2(d.err||'refused');
   poll()})}
 function say2(t){$('choff').textContent=t}

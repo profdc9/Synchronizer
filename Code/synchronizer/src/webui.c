@@ -543,11 +543,12 @@ void http_dispatch(const char *method, const char *path, const char *query,
   {
     long h = http_query_int(query, "h", -1);
     long m = http_query_int(query, "m", 0);
+    long s = http_query_int(query, "s", 0);
 
-    if (h < 0 || h > 23 || m < 0 || m > 59)
+    if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59)
     { reply_lit(out, 400, "application/json", "{\"ok\":false,\"err\":\"bad time\"}"); return; }
 
-    if (!chime_mark((uint32_t)h, (uint32_t)m))
+    if (!chime_mark((uint32_t)h, (uint32_t)m, (uint32_t)s))
     { reply_lit(out, 503, "application/json",
                 "{\"ok\":false,\"err\":\"no time yet\"}"); return; }
 

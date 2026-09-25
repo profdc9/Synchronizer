@@ -130,10 +130,13 @@ const char web_page[] =
   "</section>\n"
   "\n"
   "<section><h2>Chime</h2>\n"
-  "<p class=\"note\" style=\"margin:0 0 10px\">Set the hour the clock is about to strike, then press the button the\n"
-  "moment you hear it. That is what tells the device where the hands actually are.</p>\n"
+  "<p class=\"note\" style=\"margin:0 0 10px\">Set what the hands actually show at the moment the chime goes off,\n"
+  "then press the button right then. Read it straight off the dial, seconds included &mdash; if this\n"
+  "clock rings a bit before or after the hour, that's exactly what belongs here, not the nearest\n"
+  "round hour.</p>\n"
   "<div class=\"row\"><label>about to strike</label>\n"
   "<input id=\"ch\" style=\"width:52px\" placeholder=\"3\">:<input id=\"cm\" style=\"width:52px\" value=\"00\">\n"
+  ":<input id=\"cs\" style=\"width:52px\" value=\"00\">\n"
   "<span class=\"note\" style=\"margin:0\">clock face, 1&ndash;12 is fine</span></div>\n"
   "<div class=\"big-row\"><button class=\"p big\" onclick=\"heard()\">Heard it &mdash; now</button></div>\n"
   "<table style=\"margin-top:12px\">\n"
@@ -293,7 +296,7 @@ const char web_page[] =
   "var logcur=-1;\n"
   "var errHist=[],errCursor=-1,errHover=-1;\n"
   "var ntpHist=[],ntpCursor=-1,ntpHover=-1;\n"
-  "var WEBVER='d1ff99a3';\n"
+  "var WEBVER='26754267';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -533,9 +536,9 @@ const char web_page[] =
   " return (h<10\?'0':'')+h+':'+(m<10\?'0':'')+m+':'+(x<10\?'0':'')+x}\n"
   "\n"
   "function heard(){\n"
-  " var h=parseInt($('ch').value,10),m=parseInt($('cm').value,10)||0;\n"
+  " var h=parseInt($('ch').value,10),m=parseInt($('cm').value,10)||0,s=parseInt($('cs').value,10)||0;\n"
   " if(isNaN(h)){say2('Enter the hour it is about to strike.');return}\n"
-  " post('/api/chime\?h='+h+'&m='+m).then(function(d){\n"
+  " post('/api/chime\?h='+h+'&m='+m+'&s='+s).then(function(d){\n"
   "  if(d&&d.ok===false)say2(d.err||'refused');\n"
   "  poll()})}\n"
   "function say2(t){$('choff').textContent=t}\n"
@@ -731,4 +734,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
-const char web_version[] = "d1ff99a3";
+const char web_version[] = "26754267";
