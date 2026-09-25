@@ -163,10 +163,14 @@ leave it at 0 unless you want to correct for your own reaction.</div>
 <button onclick="cfg('pw,adv,ret')">Apply</button></div>
 <div class="row"><button onclick="act('pulse&us='+v('pw'))">Test pulse</button>
 <button onclick="act('coiloff')">Coil off</button></div>
-<div class="note">The two placements are not equal &mdash; an attract-only coil retards
-far more strongly than it advances. Use <code>FORCEERR</code> on the console to trigger
-KICK on demand and watch which way a placement actually moves the clock. Start with a
-narrow pulse and work up.</div>
+<div class="row"><label>corr width</label><input id="advw" style="width:62px">
+<label style="min-width:34px">ret</label><input id="retw" style="width:62px">
+<button onclick="cfg('advw,retw')">Apply</button></div>
+<div class="note">Correction width, used only by KICK's own pulses &mdash; separate from
+the manual test-pulse width above, since the two placements are not equal: an attract-only
+coil retards far more strongly than it advances, so each direction usually wants its own
+width. 0 disables that direction's corrections entirely. Use <code>FORCEERR</code> on the
+console to trigger KICK on demand and watch which way a placement actually moves the clock.</div>
 </section>
 
 <section><h2>Time</h2>
@@ -223,7 +227,7 @@ from here is visible to anyone watching it.</p>
 <option value="PULSE 2000"><option value="COILOFF"><option value="COILTEST 3000 YES"><option value="SAVE">
 <option value="RATEKP 350"><option value="FILTER 16 4 12">
 <option value="KICK 5 25"><option value="FORCEERR 30000">
-<option value="HYST 30"><option value="PTIME 20000 20000">
+<option value="HYST 30"><option value="PTIME 20000 20000"><option value="PW 2000 2000">
 </datalist>
 <pre id="out">Nothing run yet.</pre>
 </section>
@@ -368,7 +372,7 @@ function poll(){var mySeq=++pollSeq;
  var L=d.loop,e=$('lstate');e.textContent=L.state;
  e.className='pill '+(L.state=='track'?'on':L.state=='hold'?'bad':'off');
  t('lerr',num(L.err_us));t('lfilt',num(L.filt_us));t('lev',num(L.events)+' ('+L.missed+' missed)');
- t('ldrift',num(L.drift_ppb));t('lcred',num(L.credit_ns));t('loff',num(L.offset_ms));
+ t('ldrift',num(L.drift_ppb));t('loff',num(L.offset_ms));
  var b=$('ctlbtn');b.textContent=L.on?'Stop loop':'Start loop';
  b.onclick=function(){act('control&on='+(L.on?0:1))};
  fld('kp',L.kp);fld('ki',L.ki);fld('slew',L.slew);
@@ -404,6 +408,7 @@ function poll(){var mySeq=++pollSeq;
  t('dp',num(D.pulses)+(D.refused?' ('+D.refused+' refused)':''));
  t('dbud',num(D.budget));
  fld('pw',D.pw);fld('adv',D.adv);fld('ret',D.ret);
+ fld('advw',D.advw);fld('retw',D.retw);
 
  var C2=d.chime;
  if(C2.have){var o=C2.offset_ms/1000;

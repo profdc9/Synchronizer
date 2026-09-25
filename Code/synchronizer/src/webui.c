@@ -175,9 +175,11 @@ static uint32_t json_status(char *b, uint32_t n)
 
   u += (uint32_t)snprintf(b + u, n - u,
     "\"drive\":{\"on\":%d,\"pw\":%u,\"adv\":%ld,\"ret\":%ld,"
+      "\"advw\":%u,\"retw\":%u,"
       "\"pulses\":%lu,\"refused\":%lu,\"budget\":%lu},",
     drive_is_on() ? 1 : 0, cfg.pulse_us, (long)cfg.pulse_advance_us,
     (long)cfg.pulse_retard_us,
+    cfg.pulse_advance_width_us, cfg.pulse_retard_width_us,
     (unsigned long)drive_pulse_count(), (unsigned long)drive_refused_count(),
     (unsigned long)drive_budget_us());
 
@@ -334,6 +336,11 @@ static bool apply_config(const char *q)
   if (set_u32(q, "pw",     &t, 0u, DRIVE_MAX_PULSE_US)) { cfg.pulse_us = t;                touched = true; }
   if (set_i32(q, "adv",    &ti, -half, half))  { cfg.pulse_advance_us = ti; touched = true; }
   if (set_i32(q, "ret",    &ti, -half, half))  { cfg.pulse_retard_us  = ti; touched = true; }
+  /* 0 deliberately disables that direction's corrections - see the
+     config.h comment on pulse_advance_width_us/pulse_retard_width_us -
+     so the lower bound here is 0, not 1. */
+  if (set_u32(q, "advw",   &t, 0u, DRIVE_MAX_PULSE_US)) { cfg.pulse_advance_width_us = t; touched = true; }
+  if (set_u32(q, "retw",   &t, 0u, DRIVE_MAX_PULSE_US)) { cfg.pulse_retard_width_us  = t; touched = true; }
   if (set_u32(q, "kp",     &t, 1u, 1000000u))  { cfg.kp_swings = t;              touched = true; }
   if (set_u32(q, "ki",     &t, 1u, 1000000u))  { cfg.ki_swings = t;              touched = true; }
   if (set_u32(q, "slew",   &t, 1u, 100000u))   { cfg.slew_limit_ppm = (int32_t)t;    touched = true; }

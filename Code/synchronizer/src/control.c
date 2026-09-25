@@ -336,7 +336,19 @@ static bool fire_for(const sense_event *ev, bool retard)
     signed_when += (int64_t)period_us;
   when = (uint64_t)signed_when;
 
-  return drive_pulse_at(when, cfg.pulse_us);
+  /* Each direction gets its own width, set together by PW - see the
+     config.h comment on pulse_advance_width_us/pulse_retard_width_us for
+     why one width for both is the wrong shape given how asymmetric the
+     two placements already are.  0 means that direction has deliberately
+     been left unset, same idiom as the old AUTH prices: refuse rather
+     than guess a width, which is what lets a retard-only installation
+     (the common case - an attract-only coil advances far more weakly)
+     leave advance at 0 and safely never act on it. */
+  {
+    uint32_t width = retard ? cfg.pulse_retard_width_us : cfg.pulse_advance_width_us;
+    if (!width) return false;
+    return drive_pulse_at(when, width);
+  }
 }
 
 /* KICK mode: a bang-bang hysteresis scheme that needs no measured

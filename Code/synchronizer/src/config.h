@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  20u
+#define CONFIG_VERSION  21u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -133,7 +133,9 @@ typedef struct _synchronizer_config
   uint16_t tank_floor_adc;      /* envelope reading far off resonance    */
 
   /* --- drive ------------------------------------------------------ */
-  uint32_t pulse_us;            /* width of one correction pulse         */
+  uint32_t pulse_us;            /* width for manual PULSE/PULSETRACE, and
+                                    the fallback below if a directional
+                                    width is ever left at 0              */
   /* Both placements are offsets from the SAME centre - drive_offset_ppt's
      instant, halfway between sense events for this clock's opposite-
      extreme coils - not two independently-anchored windows.  Signed and
@@ -161,6 +163,18 @@ typedef struct _synchronizer_config
      correction it never delivered. */
   int32_t  pulse_advance_us;
   int32_t  pulse_retard_us;
+  /* Separate WIDTHS, not just placements - the same order-of-magnitude
+     asymmetry that makes one placement retard far harder than the other
+     advances (see above) means a width chosen to be safe on the strong
+     side is often too narrow to do anything useful on the weak one, and
+     a width chosen for the weak side can be needlessly hard on the
+     strong one.  Set together by PW.  0 deliberately disables that
+     direction's corrections entirely (fire_for() in control.c refuses
+     rather than guessing a width) - the same idiom the old AUTH prices
+     used, and what lets a retard-only installation leave advance at 0
+     and safely never act on it. */
+  uint32_t pulse_advance_width_us;
+  uint32_t pulse_retard_width_us;
 
   /* --- control loop -----------------------------------------------
      KICK is the only algorithm now - a bang-bang hysteresis scheme that

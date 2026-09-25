@@ -173,6 +173,8 @@ void config_defaults(void)
   cfg.pulse_us           = 2000u;
   cfg.pulse_advance_us   = 40000u;
   cfg.pulse_retard_us    = 40000u;
+  cfg.pulse_advance_width_us = 2000u;
+  cfg.pulse_retard_width_us  = 2000u;
 
   cfg.chime_interval_min = 60u;   /* on the hour                        */
   cfg.chime_offset_ms    = 0;

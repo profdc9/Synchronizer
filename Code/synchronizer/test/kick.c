@@ -99,6 +99,7 @@ static void base_config(void)
   cfg.acquire_tol_pct = 4; cfg.kp_swings = 4200; cfg.ki_swings = 12600;
   cfg.slew_limit_ppm = 500; cfg.pulse_us = 2000;
   cfg.pulse_advance_us = 40000; cfg.pulse_retard_us = 40000;
+  cfg.pulse_advance_width_us = 2000; cfg.pulse_retard_width_us = 2000;
   cfg.kick_min_swings = 5; cfg.kick_threshold_pct = 5;
   cfg.control_enabled = 1;
 }
@@ -198,6 +199,41 @@ static int run_slip_test(void)
   return 0;
 }
 
+/* PW 0 for a direction has to mean "never act", not "use some fallback" -
+   see fire_for() in control.c.  A clock running fast with retard disabled
+   should trip into (stuck) retarding and never release, and no pulse
+   should ever actually fire. */
+static int run_disabled_direction_test(void)
+{
+  uint64_t nom;
+  control_stats cs;
+  uint32_t before;
+  int i;
+
+  printf("\n== retard width 0 must disable retard, not fall back ==\n");
+  base_config();
+  cfg.pulse_retard_width_us = 0;
+  nom = cfg_event_interval_ns();
+  t = 0; phase = 0;
+  seed = 7;
+
+  control_init();
+  control_enable(true);
+  for (i = 0; i < 700; i++) push_clean(nom);
+  before = stub_pulses;
+
+  for (i = 0; i < 20000; i++) push_drifting(nom, -3000.0, 90000.0);
+  control_stats_get(&cs);
+  printf("after drifting fast: %s, uncorrected error %lld us, %lu pulses fired\n",
+         cs.kick_active ? (cs.kick_dir_retard ? "retarding" : "advancing") : "idle",
+         (long long)(cs.sched_err_ns / 1000), (unsigned long)(stub_pulses - before));
+  if (!cs.kick_active || !cs.kick_dir_retard)
+  { printf("FAIL: should be stuck trying to retard\n"); return 1; }
+  if (stub_pulses != before)
+  { printf("FAIL: a disabled direction must never actually pulse\n"); return 1; }
+  return 0;
+}
+
 int main(void)
 {
   int rc = 0;
@@ -215,6 +251,7 @@ int main(void)
   rc |= run_case("persistently slow: KICK must advance", 3000.0, -90000.0, false);
 
   rc |= run_slip_test();
+  rc |= run_disabled_direction_test();
 
   printf("\n%s\n", rc ? "FAILED" : "ok");
   return rc;

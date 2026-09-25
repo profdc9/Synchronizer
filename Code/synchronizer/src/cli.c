@@ -190,8 +190,16 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
 
   printf("\r\n-- drive ------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "coil", drive_is_on() ? "ON" : "off");
-  printf("%-22s %u us wide, %ld us advance, %ld us retard\r\n", "pulse",
-         cfg.pulse_us, (long)cfg.pulse_advance_us, (long)cfg.pulse_retard_us);
+  printf("%-22s %ld us advance, %ld us retard\r\n", "pulse placement",
+         (long)cfg.pulse_advance_us, (long)cfg.pulse_retard_us);
+  if (cfg.pulse_advance_width_us)
+    printf("%-22s %u us\r\n", "pulse width, advance", cfg.pulse_advance_width_us);
+  else
+    printf("%-22s disabled (width 0)\r\n", "pulse width, advance");
+  if (cfg.pulse_retard_width_us)
+    printf("%-22s %u us\r\n", "pulse width, retard", cfg.pulse_retard_width_us);
+  else
+    printf("%-22s disabled (width 0)\r\n", "pulse width, retard");
   printf("%-22s %lu fired, %lu refused, %lu us budget\r\n", "pulses",
          (unsigned long)drive_pulse_count(), (unsigned long)drive_refused_count(),
          (unsigned long)drive_budget_us());
@@ -503,10 +511,17 @@ static int coiltest_cmd(int args, tinycl_parameter *tp, void *v)
 
 static int pw_cmd(int args, tinycl_parameter *tp, void *v)
 {
+  uint32_t adv = (uint32_t)tp[0].ti.i, ret = (uint32_t)tp[1].ti.i;
   (void)args; (void)v;
-  cfg.pulse_us = (uint32_t)tp[0].ti.i;
-  if (cfg.pulse_us > DRIVE_MAX_PULSE_US) cfg.pulse_us = DRIVE_MAX_PULSE_US;
-  printf("pulse width %u us\r\n", cfg.pulse_us);
+  if (adv > DRIVE_MAX_PULSE_US) adv = DRIVE_MAX_PULSE_US;
+  if (ret > DRIVE_MAX_PULSE_US) ret = DRIVE_MAX_PULSE_US;
+  cfg.pulse_advance_width_us = adv;
+  cfg.pulse_retard_width_us  = ret;
+  printf("advance width %u us, retard width %u us%s%s\r\n", adv, ret,
+         (!adv || !ret) ? " - " : "",
+         !adv && !ret ? "neither direction will pulse"
+         : !adv ? "advance disabled, can only retard"
+         : !ret ? "retard disabled, can only advance" : "");
   return 1;
 }
 
@@ -997,7 +1012,8 @@ static int recreate_cmd(int args, tinycl_parameter *tp, void *v)
   printf("WINDOWS %u %u %u\r\n",
          cfg.rearm_pct, cfg.min_event_pct, cfg.max_event_pct);
   printf("LOCK %u %u\r\n", cfg.acquire_events, cfg.acquire_tol_pct);
-  printf("PW %lu\r\n", (unsigned long)cfg.pulse_us);
+  printf("PW %lu %lu\r\n", (unsigned long)cfg.pulse_advance_width_us,
+         (unsigned long)cfg.pulse_retard_width_us);
   printf("PTIME %ld %ld\r\n",
          (long)cfg.pulse_advance_us, (long)cfg.pulse_retard_us);
   printf("KICK %u %u\r\n",
@@ -1067,7 +1083,8 @@ static const tinycl_command tcmds[] =
   { "PULSE",    "us - fire the coil once, now",           pulse_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "COILOFF",  "drop the coil and cancel pending",       coiloff_cmd,  {TINYCL_PARM_END} },
   { "COILTEST", "ms YES - hold the coil on to feel it pull; once per boot", coiltest_cmd, {TINYCL_PARM_INT, TINYCL_PARM_STR, TINYCL_PARM_END} },
-  { "PW",       "us - correction pulse width",            pw_cmd,       {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "PW",       "advance_us retard_us - correction pulse width, 0 disables that direction", pw_cmd,
+                {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "PTIME",    "advance_us retard_us - pulse placing",   ptime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "KICK",     "min_swings threshold_pct - hysteresis params, picks direction itself", kick_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "FORCEERR", "us - test only: seed uncorrected error to trigger KICK", forceerr_cmd, {TINYCL_PARM_INT, TINYCL_PARM_END} },
