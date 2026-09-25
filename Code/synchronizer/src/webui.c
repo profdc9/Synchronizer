@@ -408,6 +408,29 @@ void http_dispatch(const char *method, const char *path, const char *query,
     return;
   }
 
+  /* The uncorrected-error history, from a cursor - same idiom as
+     /api/log above.  First line is the cursor to pass back next time;
+     each line after it is one sample, oldest first, as "err_us,pulse"
+     (pulse: 0 none, 1 advance, 2 retard).  Capped well under
+     control.c's own ring size per request so one slow poll cannot
+     starve the body buffer; a client behind by more than that just
+     catches up over a couple of polls. */
+  if (strcmp(path, "/api/errhist") == 0)
+  {
+    uint32_t from = (uint32_t)http_query_int(query, "from", 0);
+    int32_t  err_buf[192];
+    int8_t   pulse_buf[192];
+    uint32_t next = 0u, n, i, u;
+    n = control_errhist_read(from, err_buf, pulse_buf,
+                             sizeof(err_buf) / sizeof(err_buf[0]), &next);
+    u = (uint32_t)snprintf(scratch, scratch_len, "%lu\n", (unsigned long)next);
+    for (i = 0; i < n && u < scratch_len - 16u; i++)
+      u += (uint32_t)snprintf(scratch + u, scratch_len - u, "%ld,%d\n",
+                              (long)err_buf[i], pulse_buf[i]);
+    reply(out, 200, "text/plain; charset=utf-8", scratch, u);
+    return;
+  }
+
   if (strcmp(path, "/api/cli") == 0)
   {
     if (!post)

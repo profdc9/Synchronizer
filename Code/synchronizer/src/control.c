@@ -188,6 +188,52 @@ void control_set_phaselog(uint32_t secs)
 
 uint32_t control_phaselog(void) { return phaselog_secs; }
 
+/* --- ERRHIST: a ring of recent (uncorrected error, pulse fired) samples,
+   one per tracked event, for the web page's line graph of sched_err_ns
+   against swing number.  seq is a monotonic count of samples ever pushed -
+   same cursor idiom as the console log ring in cli.c - so a client asks
+   only for what is new since its last poll and builds up as long a history
+   as it wants client-side, decoupled from how much this ring can hold. */
+#define ERRHIST_SIZE  1024u
+typedef struct { int32_t err_us; int8_t pulse; } errhist_sample;
+                                     /* pulse: 0 none, 1 advance, 2 retard */
+static errhist_sample errhist[ERRHIST_SIZE];
+static uint32_t        errhist_seq;  /* samples ever pushed                */
+
+static void errhist_push(int64_t err_ns, int8_t pulse)
+{
+  errhist[errhist_seq % ERRHIST_SIZE].err_us = (int32_t)(err_ns / 1000);
+  errhist[errhist_seq % ERRHIST_SIZE].pulse  = pulse;
+  errhist_seq++;
+}
+
+uint32_t control_errhist_seq(void) { return errhist_seq; }
+
+/* Fill err_us_out[]/pulse_out[] with up to n samples starting at `from` (a
+   seq from a previous call, or 0 for the oldest still held) and set *next
+   to the seq to pass as `from` on the following call.  If `from` has
+   already scrolled out of the ring, starts from the oldest sample still
+   available rather than failing. */
+uint32_t control_errhist_read(uint32_t from, int32_t *err_us_out, int8_t *pulse_out,
+                              uint32_t n, uint32_t *next)
+{
+  uint32_t avail, want, start, i;
+
+  if (from > errhist_seq) from = errhist_seq;   /* a restarted device */
+  *next = errhist_seq;
+  avail = errhist_seq - from;
+  if (avail > ERRHIST_SIZE) avail = ERRHIST_SIZE;   /* the rest scrolled away */
+  want  = (avail < n) ? avail : n;
+  start = errhist_seq - avail;
+  for (i = 0; i < want; i++)
+  {
+    const errhist_sample *s = &errhist[(start + i) % ERRHIST_SIZE];
+    err_us_out[i] = s->err_us;
+    pulse_out[i]  = s->pulse;
+  }
+  return want;
+}
+
 static uint64_t event_ns_nominal(void)
 {
   return cfg_event_interval_ns();
@@ -509,7 +555,13 @@ static void track_event(const sense_event *ev)
     kick_accum_ns += kick_filt_ns;
   }
 
-  if (cfg.control_enabled) kick_step(ev);
+  {
+    uint32_t before = disc_pulses;
+    int8_t   pulse  = 0;
+    if (cfg.control_enabled) kick_step(ev);
+    if (disc_pulses != before) pulse = kick_dir_retard ? 2 : 1;
+    errhist_push(sched_err_ns, pulse);
+  }
 }
 
 static void acquire_event(const sense_event *ev)

@@ -82,6 +82,14 @@ reloading. <button onclick="location.reload(true)">Reload</button></div>
 <div class="note">A positive offset holds the hands <em>back</em> &mdash; use it when the clock is running ahead. The loop slews there at the rate limit; it never jumps.</div>
 </section>
 
+<section class="wide"><h2>Uncorrected Error</h2>
+<canvas id="ecv" width="1100" height="130"></canvas>
+<div class="note"><span id="etip">hover the graph to inspect a swing</span>
+&nbsp;&mdash;&nbsp;<span style="color:var(--acc)">&#9644;</span> uncorrected error
+&nbsp;<span style="color:var(--ok)">&#9679;</span> advance pulse
+&nbsp;<span style="color:var(--warn)">&#9679;</span> retard pulse</div>
+</section>
+
 <section><h2>Clock</h2>
 <table>
 <tr><td class="k">swing period</td><td class="v"><span id="cper">-</span></td></tr>
@@ -238,6 +246,7 @@ var S=null,scanning=false,cliseq=-1,cliwait=false,cliempty=true;
 var pollSeq=0;
 var hist=[],hpos=0,hdraft='';
 var logcur=-1;
+var errHist=[],errCursor=-1,errHover=-1;
 var WEBVER='__WEBVER__';
 function $(i){return document.getElementById(i)}
 function v(i){return $(i).value}
@@ -319,6 +328,82 @@ function cliDone(){
   cliAdd(t.replace(/\r/g,'')||'(no output)');
   cliwait=false;$('runbtn').disabled=false})}
 
+/* Unlike pumpLog, the backlog IS wanted here - the ring already holds up
+   to a thousand-odd past swings, and a fresh page load should show that
+   history right away rather than starting from an empty graph and only
+   filling in one point per second from here on.  Each response is capped
+   well under the ring size, so a page that opens well behind just catches
+   up over a few polls instead of in one. */
+function pumpErr(){
+ fetch('/api/errhist?from='+(errCursor<0?0:errCursor)).then(function(r){return r.text()})
+  .then(function(t){
+   var nl=t.indexOf('\n'); if(nl<0)return;
+   var seq=parseInt(t.slice(0,nl),10), body=t.slice(nl+1);
+   errCursor=seq;
+   if(!body)return;
+   var lines=body.split('\n'), grew=false;
+   for(var i=0;i<lines.length;i++){
+    if(!lines[i])continue;
+    var c=lines[i].split(','), u=parseInt(c[0],10), p=parseInt(c[1],10);
+    if(isNaN(u))continue;
+    errHist.push({u:u,p:p}); grew=true}
+   if(errHist.length>1500)errHist.splice(0,errHist.length-1500);
+   if(grew)drawErr()})
+  .catch(function(){})}
+
+function drawErr(){
+ var c=$('ecv'),g=c.getContext('2d'),W=c.width,H=c.height;
+ var cs=getComputedStyle(document.documentElement);
+ var n=errHist.length, x0=44,x1=W-8,y0=8,y1=H-10,i;
+ g.clearRect(0,0,W,H);
+ if(!n){g.fillStyle=cs.getPropertyValue('--dim');g.font='12px sans-serif';
+  g.fillText('no swings tracked yet',10,H/2);return}
+ var mn=errHist[0].u,mx=errHist[0].u;
+ for(i=1;i<n;i++){if(errHist[i].u<mn)mn=errHist[i].u;if(errHist[i].u>mx)mx=errHist[i].u}
+ if(mn>0)mn=0; if(mx<0)mx=0;                  /* zero always on-scale */
+ var pad=(mx-mn)*0.1||1000; mn-=pad; mx+=pad;
+ var xf=function(i){return x0+(x1-x0)*(n>1?i/(n-1):1)};
+ var yf=function(u){return y1-(y1-y0)*((u-mn)/(mx-mn))};
+
+ g.strokeStyle=cs.getPropertyValue('--line');g.lineWidth=1;g.beginPath();
+ g.moveTo(x0,yf(0));g.lineTo(x1,yf(0));g.stroke();
+
+ g.strokeStyle=cs.getPropertyValue('--acc');g.lineWidth=1.5;g.beginPath();
+ for(i=0;i<n;i++){var x=xf(i),y=yf(errHist[i].u); i?g.lineTo(x,y):g.moveTo(x,y)}
+ g.stroke();
+
+ for(i=0;i<n;i++){
+  if(!errHist[i].p)continue;
+  g.fillStyle=cs.getPropertyValue(errHist[i].p==1?'--ok':'--warn');
+  g.beginPath();g.arc(xf(i),yf(errHist[i].u),3.5,0,Math.PI*2);g.fill()}
+
+ g.fillStyle=cs.getPropertyValue('--dim');g.font='10px ui-monospace,monospace';
+ g.fillText((mx>=0?'+':'')+num(Math.round(mx))+' us',2,y0+8);
+ g.fillText((mn>=0?'+':'')+num(Math.round(mn))+' us',2,y1);
+
+ if(errHover>=0&&errHover<n){
+  var hx=xf(errHover);
+  g.strokeStyle=cs.getPropertyValue('--dim');g.lineWidth=1;g.beginPath();
+  g.moveTo(hx,y0);g.lineTo(hx,y1);g.stroke()}}
+
+(function(){
+ var c=$('ecv');
+ function pick(e){
+  var n=errHist.length; if(!n)return;
+  var r=c.getBoundingClientRect();
+  var x=(e.clientX-r.left)*(c.width/r.width);
+  var x0=44,x1=c.width-8, f=(x-x0)/(x1-x0);
+  if(f<0)f=0; if(f>1)f=1;
+  errHover=Math.round(f*(n-1));
+  var s=errHist[errHover], ago=n-1-errHover;
+  t('etip',(ago?ago+' swing'+(ago==1?'':'s')+' ago':'latest')+': '+num(s.u)+' us'+
+   (s.p==1?' — advance pulse':s.p==2?' — retard pulse':''));
+  drawErr()}
+ c.addEventListener('mousemove',pick);
+ c.addEventListener('mouseleave',function(){
+  errHover=-1;t('etip','hover the graph to inspect a swing');drawErr()})
+})();
+
 function hhmm(s){if(s===null||s===undefined)return '-';
  var h=Math.floor(s/3600),m=Math.floor(s/60)%60,x=s%60;
  return (h<10?'0':'')+h+':'+(m<10?'0':'')+m+':'+(x<10?'0':'')+x}
@@ -368,6 +453,7 @@ function poll(){var mySeq=++pollSeq;
  else if(d.cliseq!=cliseq){cliseq=d.cliseq;cliDone()}
  if(d.web&&d.web!=WEBVER)$('stale').style.display='block';
  pumpLog();
+ pumpErr();
 
  var L=d.loop,e=$('lstate');e.textContent=L.state;
  e.className='pill '+(L.state=='track'?'on':L.state=='hold'?'bad':'off');

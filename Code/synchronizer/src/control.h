@@ -143,14 +143,24 @@ void control_set_phaselog(uint32_t secs);
 uint32_t control_phaselog(void);
 
 /* CONTROL Y/N is the master switch - N idles the whole loop, including the
-   phase/rate tracking.  This is a narrower one: it mutes only the actual
-   corrective pulse (AUTH's spend or KICK's kick), leaving tracking,
-   credit_ns/kick_active/kick_since bookkeeping, and PHASELOG's numbers
-   running exactly as if it were on.  Not saved to flash - defaults to on
-   at every boot, same as CONTROL defaults to off; the two are independent
-   and this one only does anything while CONTROL is on. */
+   phase/rate tracking.  This is a narrower one: it mutes only KICK's
+   actual corrective pulse, leaving tracking, kick_active/kick_since
+   bookkeeping, and PHASELOG's numbers running exactly as if it were on.
+   Not saved to flash - defaults to on at every boot, same as CONTROL
+   defaults to off; the two are independent and this one only does
+   anything while CONTROL is on. */
 void control_set_actuator(bool on);
 bool control_actuator(void);
+
+/* ERRHIST: the web page's error-vs-swing-number graph reads through
+   these.  control_errhist_seq() is the current cursor; control_errhist_
+   read() fills err_us_out[]/pulse_out[] (pulse: 0 none, 1 advance,
+   2 retard) with up to n samples from `from` onward and reports the
+   cursor to pass next time, same idiom as cli_log_read().  See the
+   errhist comment in control.c for the ring's size and cadence. */
+uint32_t control_errhist_seq(void);
+uint32_t control_errhist_read(uint32_t from, int32_t *err_us_out, int8_t *pulse_out,
+                              uint32_t n, uint32_t *next);
 
 #ifdef __cplusplus
 }
