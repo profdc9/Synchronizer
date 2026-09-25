@@ -970,7 +970,7 @@ static int save_cmd(int args, tinycl_parameter *tp, void *v)
 
 /* Everything a config-layout change (CONFIG_VERSION) or a bad flash wipes,
    as the exact commands that put it back - so a reflash is "paste this
-   back in" rather than "remember what THRESH, WINDOWS, PTIME and AUTH
+   back in" rather than "remember what THRESH, WINDOWS, PTIME and KICK
    were before". WIFI/APKEY/HOSTNAME are deliberately left out: they live
    in their own flash sector (see config.h) and survive a version bump on
    their own, so replaying them here would be redundant at best and would
