@@ -254,6 +254,7 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
     {
       printf("%-22s %lu:%02lu from now\r\n", "next chime",
              (unsigned long)(away / 60u), (unsigned long)(away % 60u));
+      printf("%-22s %lu s\r\n", "seconds to strike", (unsigned long)away);
       print_sod("  striking", face);
       print_sod("  at true time", real);
     }
@@ -261,6 +262,11 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
   else
     printf("%-22s not measured - use CHIME once you hear it\r\n", "hands are");
   printf("%-22s every %lu min\r\n", "chimes", (unsigned long)cfg.chime_interval_min);
+  if (cfg.chime_strike_offset_s)
+    printf("%-22s %ld s %s the hour\r\n", "strike offset",
+           (long)(cfg.chime_strike_offset_s < 0 ? -cfg.chime_strike_offset_s
+                                                 : cfg.chime_strike_offset_s),
+           cfg.chime_strike_offset_s < 0 ? "before" : "after");
 
   printf("\r\n-- loop -------------------------------------------------\r\n");
   printf("%-22s %s\r\n", "state", control_state_name(cs.state));
@@ -867,13 +873,24 @@ static int tz_cmd(int args, tinycl_parameter *tp, void *v)
 
 static int chimeset_cmd(int args, tinycl_parameter *tp, void *v)
 {
+  int32_t off;
   (void)args; (void)v;
   cfg.chime_interval_min = (uint32_t)tp[0].ti.i;
   if (cfg.chime_interval_min == 0u || cfg.chime_interval_min > 720u)
     cfg.chime_interval_min = 60u;
   cfg.chime_latency_ms = (uint32_t)tp[1].ti.i;
-  printf("chimes every %lu min, press allowance %lu ms\r\n",
+  off = (int32_t)tp[2].ti.i;
+  {
+    int32_t half = (int32_t)(cfg.chime_interval_min * 60u) / 2;
+    if (off >  half) off =  half;
+    if (off < -half) off = -half;
+  }
+  cfg.chime_strike_offset_s = off;
+  printf("chimes every %lu min, press allowance %lu ms, strikes",
          (unsigned long)cfg.chime_interval_min, (unsigned long)cfg.chime_latency_ms);
+  if (off == 0) printf(" exactly on the hour\r\n");
+  else printf(" %ld s %s the hour\r\n", (long)(off < 0 ? -off : off),
+              off < 0 ? "before" : "after");
   return 1;
 }
 
@@ -1014,9 +1031,10 @@ static int recreate_cmd(int args, tinycl_parameter *tp, void *v)
   printf("GAINS %lu %lu\r\n",
          (unsigned long)cfg.kp_swings, (unsigned long)cfg.ki_swings);
   printf("SLEW %ld\r\n", (long)cfg.slew_limit_ppm);
-  printf("CHIMESET %lu %lu\r\n",
+  printf("CHIMESET %lu %lu %ld\r\n",
          (unsigned long)cfg.chime_interval_min,
-         (unsigned long)cfg.chime_latency_ms);
+         (unsigned long)cfg.chime_latency_ms,
+         (long)cfg.chime_strike_offset_s);
   printf("TZ %ld\r\n", (long)(cfg.tz_offset_s / 60));
   printf("NTP %s\r\n", cfg.ntp_host);
   printf("CONTROL %s\r\n", cfg.control_enabled ? "Y" : "N");
@@ -1093,7 +1111,8 @@ static const tinycl_command tcmds[] =
   { "SYNC",     "ask for an NTP exchange now",            sync_cmd,     {TINYCL_PARM_END} },
   { "NET",      "interfaces, servers and their counters",  net_cmd,      {TINYCL_PARM_END} },
   { "CHIME",    "hour minute - heard it strike, now",     chime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "CHIMESET", "interval_min press_allowance_ms",        chimeset_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "CHIMESET", "interval_min press_allowance_ms strike_offset_s", chimeset_cmd,
+                {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "TZ",       "minutes from UTC (-300 = UTC-5)",        tz_cmd,       {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "AP",       "y|n - raise the setup access point",     ap_cmd,       {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "APKEY",    "password for the setup access point",    apkey_cmd,    {TINYCL_PARM_STR, TINYCL_PARM_END} },

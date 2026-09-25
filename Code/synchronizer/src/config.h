@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define CONFIG_MAGIC    0x53594e43u   /* "SYNC" */
-#define CONFIG_VERSION  21u
+#define CONFIG_VERSION  22u
 
 /* Who we are on the network lives in its own sector, with its own magic and
    its own version that changes only when THESE fields change.
@@ -253,6 +253,13 @@ typedef struct _synchronizer_config
   int32_t  chime_offset_ms;     /* hands ahead of true local time        */
   uint32_t chime_latency_ms;    /* allowance for the press trailing it   */
   uint64_t chime_ref_utc;       /* unix seconds of the last mark         */
+  /* A real striking train does not necessarily release exactly on the
+     hour - it can be a few seconds to either side, a fixed mechanical
+     property of this specific clock.  Seconds after each interval
+     boundary (by the HANDS' reading, not true time) that it actually
+     strikes; see chime_next() in chime.c.  0 (the default) means
+     "exactly on the hour", the old assumed behaviour. */
+  int32_t  chime_strike_offset_s;
   uint8_t  chime_valid;
   uint8_t  pad1[3];
 

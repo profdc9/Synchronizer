@@ -112,6 +112,7 @@ moment you hear it. That is what tells the device where the hands actually are.<
 <tr><td class="k">hands are</td><td class="v"><span id="choff">not measured</span></td></tr>
 <tr><td class="k">clock face reads</td><td class="v"><span id="chnow">-</span></td></tr>
 <tr><td class="k">next chime</td><td class="v"><span id="chnext">-</span></td></tr>
+<tr><td class="k">seconds to strike</td><td class="v"><span id="chaway">-</span></td></tr>
 <tr><td class="k">it will strike</td><td class="v"><span id="chface">-</span></td></tr>
 <tr><td class="k">at true time</td><td class="v"><span id="chtrue">-</span></td></tr>
 </table>
@@ -125,6 +126,12 @@ real discrepancy in any reasonable time, so a genuine offset needs the hands mov
 <button onclick="cfg('cint,clat')">Apply</button></div>
 <div class="note">Pressing trails the sound by a few hundred milliseconds. The allowance is added back;
 leave it at 0 unless you want to correct for your own reaction.</div>
+<div class="row"><label>strikes</label><input id="soff" style="width:56px">
+<span class="note" style="margin:0">s after the hour (negative if before)</span>
+<button onclick="cfg('soff')">Apply</button></div>
+<div class="note">A real striking train doesn't necessarily release exactly on the hour &mdash;
+this shifts "next chime"/"seconds to strike" above to match this clock's own quirk, without
+changing when the hands are measured.</div>
 </section>
 
 <section><h2>Sense</h2>
@@ -594,10 +601,11 @@ function poll(){var mySeq=++pollSeq;
   t('chnow',C2.have_now?hhmm(C2.now_sod):'-');
   if(C2.next){var a=C2.away;
    t('chnext',Math.floor(a/60)+'m '+(a%60)+'s');
+   t('chaway',num(a)+' s');
    t('chface',hhmm(C2.face_sod));t('chtrue',hhmm(C2.true_sod));}
-  else {t('chnext','-');t('chface','-');t('chtrue','-')}}
- else {t('choff','not measured');t('chnow','-');t('chnext','-');t('chface','-');t('chtrue','-')}
- fld('cint',C2.interval);fld('clat',C2.latency);
+  else {t('chnext','-');t('chaway','-');t('chface','-');t('chtrue','-')}}
+ else {t('choff','not measured');t('chnow','-');t('chnext','-');t('chaway','-');t('chface','-');t('chtrue','-')}
+ fld('cint',C2.interval);fld('clat',C2.latency);fld('soff',C2.strike_off);
  if(document.activeElement!==$('ch')&&C2.sod<86400){
   var nh=(Math.floor(C2.sod/3600)+1)%24; if($('ch').value==='')$('ch').value=nh%12||12}
 

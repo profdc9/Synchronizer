@@ -140,6 +140,7 @@ const char web_page[] =
   "<tr><td class=\"k\">hands are</td><td class=\"v\"><span id=\"choff\">not measured</span></td></tr>\n"
   "<tr><td class=\"k\">clock face reads</td><td class=\"v\"><span id=\"chnow\">-</span></td></tr>\n"
   "<tr><td class=\"k\">next chime</td><td class=\"v\"><span id=\"chnext\">-</span></td></tr>\n"
+  "<tr><td class=\"k\">seconds to strike</td><td class=\"v\"><span id=\"chaway\">-</span></td></tr>\n"
   "<tr><td class=\"k\">it will strike</td><td class=\"v\"><span id=\"chface\">-</span></td></tr>\n"
   "<tr><td class=\"k\">at true time</td><td class=\"v\"><span id=\"chtrue\">-</span></td></tr>\n"
   "</table>\n"
@@ -153,6 +154,12 @@ const char web_page[] =
   "<button onclick=\"cfg('cint,clat')\">Apply</button></div>\n"
   "<div class=\"note\">Pressing trails the sound by a few hundred milliseconds. The allowance is added back;\n"
   "leave it at 0 unless you want to correct for your own reaction.</div>\n"
+  "<div class=\"row\"><label>strikes</label><input id=\"soff\" style=\"width:56px\">\n"
+  "<span class=\"note\" style=\"margin:0\">s after the hour (negative if before)</span>\n"
+  "<button onclick=\"cfg('soff')\">Apply</button></div>\n"
+  "<div class=\"note\">A real striking train doesn't necessarily release exactly on the hour &mdash;\n"
+  "this shifts \"next chime\"/\"seconds to strike\" above to match this clock's own quirk, without\n"
+  "changing when the hands are measured.</div>\n"
   "</section>\n"
   "\n"
   "<section><h2>Sense</h2>\n"
@@ -286,7 +293,7 @@ const char web_page[] =
   "var logcur=-1;\n"
   "var errHist=[],errCursor=-1,errHover=-1;\n"
   "var ntpHist=[],ntpCursor=-1,ntpHover=-1;\n"
-  "var WEBVER='e8e00387';\n"
+  "var WEBVER='d1ff99a3';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -622,10 +629,11 @@ const char web_page[] =
   "  t('chnow',C2.have_now\?hhmm(C2.now_sod):'-');\n"
   "  if(C2.next){var a=C2.away;\n"
   "   t('chnext',Math.floor(a/60)+'m '+(a%60)+'s');\n"
+  "   t('chaway',num(a)+' s');\n"
   "   t('chface',hhmm(C2.face_sod));t('chtrue',hhmm(C2.true_sod));}\n"
-  "  else {t('chnext','-');t('chface','-');t('chtrue','-')}}\n"
-  " else {t('choff','not measured');t('chnow','-');t('chnext','-');t('chface','-');t('chtrue','-')}\n"
-  " fld('cint',C2.interval);fld('clat',C2.latency);\n"
+  "  else {t('chnext','-');t('chaway','-');t('chface','-');t('chtrue','-')}}\n"
+  " else {t('choff','not measured');t('chnow','-');t('chnext','-');t('chaway','-');t('chface','-');t('chtrue','-')}\n"
+  " fld('cint',C2.interval);fld('clat',C2.latency);fld('soff',C2.strike_off);\n"
   " if(document.activeElement!==$('ch')&&C2.sod<86400){\n"
   "  var nh=(Math.floor(C2.sod/3600)+1)%24; if($('ch').value==='')$('ch').value=nh%12||12}\n"
   "\n"
@@ -723,4 +731,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
-const char web_version[] = "e8e00387";
+const char web_version[] = "d1ff99a3";

@@ -106,7 +106,7 @@ bool chime_next(uint32_t *seconds_away, uint32_t *face_sod, uint32_t *true_sod)
 {
   uint32_t sod = chime_local_sod();
   uint32_t clock_sod_u;
-  int32_t  interval, clock_sod, away;
+  int32_t  interval, clock_sod, away, rel;
 
   if (!chime_face_now_sod(&clock_sod_u)) return false;
   clock_sod = (int32_t)clock_sod_u;
@@ -114,7 +114,16 @@ bool chime_next(uint32_t *seconds_away, uint32_t *face_sod, uint32_t *true_sod)
   interval = (int32_t)(cfg.chime_interval_min ? cfg.chime_interval_min : 60u) * 60;
   if (interval <= 0) return false;
 
-  away = interval - (clock_sod % interval);
+  /* The movement does not necessarily strike exactly on the hour - a real
+     striking train can release a few seconds to either side of it, a fixed
+     mechanical property of this specific clock rather than anything the
+     discipline loop touches.  chime_strike_offset_s is that quirk: it
+     shifts which instant counts as "on the hour" for this purpose, so
+     rel is 0 exactly when the hands are at a strike point rather than at
+     the interval boundary itself. */
+  rel = (clock_sod - cfg.chime_strike_offset_s) % interval;
+  if (rel < 0) rel += interval;
+  away = interval - rel;
   if (away <= 0) away += interval;
 
   if (seconds_away) *seconds_away = (uint32_t)away;

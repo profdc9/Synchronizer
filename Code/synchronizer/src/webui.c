@@ -224,10 +224,12 @@ static uint32_t json_status(char *b, uint32_t n)
     bool have_now = chime_face_now_sod(&now_sod);
     u += (uint32_t)snprintf(b + u, n - u,
       "\"chime\":{\"have\":%d,\"offset_ms\":%ld,\"interval\":%lu,"
-        "\"latency\":%lu,\"next\":%d,\"away\":%lu,\"face_sod\":%lu,"
+        "\"latency\":%lu,\"strike_off\":%ld,"
+        "\"next\":%d,\"away\":%lu,\"face_sod\":%lu,"
         "\"true_sod\":%lu,\"sod\":%lu,\"now_sod\":%lu,\"have_now\":%d},",
       chime_have() ? 1 : 0, (long)chime_offset_ms(),
       (unsigned long)cfg.chime_interval_min, (unsigned long)cfg.chime_latency_ms,
+      (long)cfg.chime_strike_offset_s,
       nxt ? 1 : 0, (unsigned long)away, (unsigned long)face,
       (unsigned long)real, (unsigned long)chime_local_sod(),
       (unsigned long)now_sod, have_now ? 1 : 0);
@@ -355,6 +357,7 @@ static bool apply_config(const char *q)
       if (mins >= -840 && mins <= 840) { cfg.tz_offset_s = (int32_t)(mins * 60); touched = true; } }
   }
   if (set_u32(q, "clat",   &t, 0u, 5000u))     { cfg.chime_latency_ms = t;        touched = true; }
+  if (set_i32(q, "soff",   &ti, -1800, 1800))  { cfg.chime_strike_offset_s = ti;  touched = true; }
   {
     char v[24];
     if (http_query_get(q, "duty", v, sizeof(v)))

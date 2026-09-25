@@ -179,6 +179,8 @@ void config_defaults(void)
   cfg.chime_offset_ms    = 0;
   cfg.chime_latency_ms   = 0u;    /* no silent fudge; see chime.h        */
   cfg.chime_ref_utc      = 0u;
+  cfg.chime_strike_offset_s = 0;  /* assume it strikes exactly on the hour
+                                      until told otherwise                */
   cfg.chime_valid        = 0u;
 
   cfg.control_enabled = 0u;       /* never runs until it is switched on    */
