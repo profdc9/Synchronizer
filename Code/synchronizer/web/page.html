@@ -194,12 +194,11 @@ round hour.</p>
 <input id="ch" style="width:52px" placeholder="3">:<input id="cm" style="width:52px" value="00">
 :<input id="cs" style="width:52px" value="00">
 <span class="note" style="margin:0">clock face, 1&ndash;12 is fine</span></div>
-<div class="big-row"><button class="p big" onclick="heard()">Heard it &mdash; now</button></div>
+<div class="big-row"><button class="p big" id="heardbtn" onclick="heard()">Heard it &mdash; now</button></div>
 <table style="margin-top:12px">
 <tr><td class="k">hands are</td><td class="v"><span id="choff">not measured</span></td></tr>
 <tr><td class="k">clock face reads</td><td class="v"><span id="chnow">-</span></td></tr>
 <tr><td class="k">next chime</td><td class="v"><span id="chnext">-</span></td></tr>
-<tr><td class="k">seconds to strike</td><td class="v"><span id="chaway">-</span></td></tr>
 <tr><td class="k">it will strike</td><td class="v"><span id="chface">-</span></td></tr>
 <tr><td class="k">at true time</td><td class="v"><span id="chtrue">-</span></td></tr>
 </table>
@@ -217,7 +216,7 @@ leave it at 0 unless you want to correct for your own reaction.</div>
 <span class="note" style="margin:0">s after the hour (negative if before)</span>
 <button onclick="cfg('soff')">Apply</button></div>
 <div class="note">A real striking train doesn't necessarily release exactly on the hour &mdash;
-this shifts "next chime"/"seconds to strike" above to match this clock's own quirk, without
+this shifts "next chime" above to match this clock's own quirk, without
 changing when the hands are measured.</div>
 </section>
 
@@ -507,12 +506,18 @@ function hhmm(s){if(s===null||s===undefined)return '-';
  var h=Math.floor(s/3600),m=Math.floor(s/60)%60,x=s%60;
  return (h<10?'0':'')+h+':'+(m<10?'0':'')+m+':'+(x<10?'0':'')+x}
 
+var heardTimer=0;
+function heardFlash(txt){var b=$('heardbtn');
+ b.textContent=txt;b.disabled=true;clearTimeout(heardTimer);
+ heardTimer=setTimeout(function(){b.innerHTML='Heard it &mdash; now';b.disabled=false},2000)}
 function heard(){
  var h=parseInt($('ch').value,10),m=parseInt($('cm').value,10)||0,s=parseInt($('cs').value,10)||0;
  if(isNaN(h)){say2('Enter the hour it is about to strike.');return}
+ say2('');
  post('/api/chime?h='+h+'&m='+m+'&s='+s).then(function(d){
-  if(d&&d.ok===false)say2(d.err||'refused');
-  poll()})}
+  if(d&&d.ok===false){say2(d.err||'refused');heardFlash('Not captured')}
+  else heardFlash('Captured \u2713');
+  poll()}).catch(function(){say2('no reply from the device - try again');heardFlash('No reply')})}
 function say2(t){$('choff').textContent=t}
 
 function scan(){if(scanning)return;scanning=true;$('scanbtn').disabled=true;
@@ -604,10 +609,9 @@ function poll(){var mySeq=++pollSeq;
   t('chnow',C2.have_now?hhmm(C2.now_sod):'-');
   if(C2.next){var a=C2.away;
    t('chnext',Math.floor(a/60)+'m '+(a%60)+'s');
-   t('chaway',num(a)+' s');
    t('chface',hhmm(C2.face_sod));t('chtrue',hhmm(C2.true_sod));}
-  else {t('chnext','-');t('chaway','-');t('chface','-');t('chtrue','-')}}
- else {t('choff','not measured');t('chnow','-');t('chnext','-');t('chaway','-');t('chface','-');t('chtrue','-')}
+  else {t('chnext','-');t('chface','-');t('chtrue','-')}}
+ else {t('choff','not measured');t('chnow','-');t('chnext','-');t('chface','-');t('chtrue','-')}
  fld('cint',C2.interval);fld('clat',C2.latency);fld('soff',C2.strike_off);
  if(document.activeElement!==$('ch')&&C2.sod<86400){
   var nh=(Math.floor(C2.sod/3600)+1)%24; if($('ch').value==='')$('ch').value=nh%12||12}

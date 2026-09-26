@@ -254,7 +254,6 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
     {
       printf("%-22s %lu:%02lu from now\r\n", "next chime",
              (unsigned long)(away / 60u), (unsigned long)(away % 60u));
-      printf("%-22s %lu s\r\n", "seconds to strike", (unsigned long)away);
       print_sod("  striking", face);
       print_sod("  at true time", real);
     }
