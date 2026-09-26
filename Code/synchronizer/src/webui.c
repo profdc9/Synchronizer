@@ -198,7 +198,7 @@ static uint32_t json_status(char *b, uint32_t n)
       "\"kickact\":%d,\"kicksince\":%lu,\"kickn\":%u,\"kickdir\":%d,"
       "\"kickthr\":%u,"
       "\"kickfilt_us\":%lld,\"kickaccum_us\":%lld,\"diff_us\":%lld,"
-      "\"schederr_us\":%lld,"
+      "\"schederr_us\":%lld,\"locked_s\":%lu,"
       "\"events\":%llu,\"missed\":%lu,"
       "\"err_us\":%lld,\"filt_us\":%lld,\"cmd_ns\":%lld,"
       "\"drift_ppb\":%lld,"
@@ -210,7 +210,7 @@ static uint32_t json_status(char *b, uint32_t n)
     (unsigned)(cfg.kick_threshold_pct ? cfg.kick_threshold_pct : 25u),
     (long long)(cs.kick_filt_ns / 1000), (long long)(cs.kick_accum_ns / 1000),
     (long long)((-cs.filt_err_ns - cs.kick_filt_ns) / 1000),
-    (long long)(cs.sched_err_ns / 1000),
+    (long long)(cs.sched_err_ns / 1000), (unsigned long)cs.locked_s,
     (unsigned long long)cs.events, (unsigned long)cs.missed,
     (long long)(cs.err_ns / 1000), (long long)(cs.filt_err_ns / 1000),
     (long long)cs.cmd_ns_per_swing,

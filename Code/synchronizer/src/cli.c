@@ -296,6 +296,7 @@ static int status_cmd(int args, tinycl_parameter *tp, void *v)
      read "positive = hands ahead, wants retarding" before comparing. */
   printf("%-22s %lld us\r\n", "edge vs phase",
          (long long)((-cs.filt_err_ns - cs.kick_filt_ns) / 1000));
+  printf("%-22s %lu s\r\n", "locked for", (unsigned long)cs.locked_s);
   printf("%-22s %llu  (%lu missed)\r\n", "events", (unsigned long long)cs.events,
          (unsigned long)cs.missed);
   print_ns("phase error", cs.err_ns);

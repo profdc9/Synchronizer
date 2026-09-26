@@ -57,6 +57,7 @@ reloading. <button onclick="location.reload(true)">Reload</button></div>
 <section><h2>Loop</h2>
 <table>
 <tr><td class="k">state</td><td class="v"><span id="lstate" class="pill">-</span></td></tr>
+<tr><td class="k">locked for</td><td class="v"><span id="llock">-</span></td></tr>
 <tr><td class="k">uncorrected error</td><td class="v"><span id="lschederr">-</span> us
  <span id="lschederrdir" style="color:var(--dim)">-</span></td></tr>
 <tr><td class="k">kick</td><td class="v"><span id="lkick" class="pill">-</span>
@@ -560,7 +561,8 @@ function poll(){var mySeq=++pollSeq;
  pumpErr();
  pumpNtp();
 
- var L=d.loop,e=$('lstate');e.textContent=L.state;
+ var L=d.loop,e=$('lstate');
+ t('llock',L.state==='track'?num(L.locked_s)+' s ('+hhmm(L.locked_s)+')':'not locked');e.textContent=L.state;
  e.className='pill '+(L.state=='track'?'on':L.state=='hold'?'bad':'off');
  t('lerr',num(L.err_us));t('lfilt',num(L.filt_us));t('lev',num(L.events)+' ('+L.missed+' missed)');
  t('ldrift',num(L.drift_ppb));

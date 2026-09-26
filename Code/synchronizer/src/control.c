@@ -152,6 +152,8 @@ static int64_t  kick_accum_ns;      /* running sum of kick_filt_ns, never
 
 static uint32_t acq_run;
 static uint64_t acq_prev_utc;
+static uint64_t lock_utc_ns;         /* NTP time of the event that started this lock */
+static uint64_t last_ev_utc;         /* NTP time of the latest usable event         */
 
 static bool ev_echo;
 static bool actuator_on = true;    /* CONTROL Y/N idles the whole loop -
@@ -602,6 +604,7 @@ static void acquire_event(const sense_event *ev)
     kick_since      = 0;
     kick_filt_ns  = 0;
     kick_accum_ns = 0;
+    lock_utc_ns   = ev->utc_ns;
     st = CTRL_TRACK;
   }
 }
@@ -633,6 +636,8 @@ void control_poll(void)
       if (st != CTRL_HOLD) enter_hold("no UTC time on this event");
       continue;
     }
+
+    last_ev_utc = ev.utc_ns;
 
     if (st == CTRL_HOLD) { st = CTRL_ACQUIRE; acq_run = 0; acq_prev_utc = 0; }
 
@@ -701,4 +706,6 @@ void control_stats_get(control_stats *o)
   o->kick_filt_ns      = kick_filt_ns;
   o->kick_accum_ns     = kick_accum_ns;
   o->sched_err_ns      = sched_err_ns;
+  o->locked_s          = (st == CTRL_TRACK && last_ev_utc > lock_utc_ns)
+                           ? (uint32_t)((last_ev_utc - lock_utc_ns) / 1000000000ull) : 0u;
 }

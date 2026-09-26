@@ -93,6 +93,8 @@ typedef struct _control_stats
                                   diagnostic only, not what fires anything */
   int64_t  kick_accum_ns;     /* KICK mode: running sum of kick_filt_ns -
                                   also diagnostic only, see sched_err_ns   */
+  uint32_t locked_s;          /* seconds of NTP time since the loop last
+                                  entered TRACK; 0 when not locked        */
   int64_t  sched_err_ns;      /* fast-smoothed ev->utc_ns - nominal_ns:
                                   what KICK's hysteresis reacts to         */
 } control_stats;

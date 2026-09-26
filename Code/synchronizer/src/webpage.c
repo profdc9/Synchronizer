@@ -85,6 +85,7 @@ const char web_page[] =
   "<section><h2>Loop</h2>\n"
   "<table>\n"
   "<tr><td class=\"k\">state</td><td class=\"v\"><span id=\"lstate\" class=\"pill\">-</span></td></tr>\n"
+  "<tr><td class=\"k\">locked for</td><td class=\"v\"><span id=\"llock\">-</span></td></tr>\n"
   "<tr><td class=\"k\">uncorrected error</td><td class=\"v\"><span id=\"lschederr\">-</span> us\n"
   " <span id=\"lschederrdir\" style=\"color:var(--dim)\">-</span></td></tr>\n"
   "<tr><td class=\"k\">kick</td><td class=\"v\"><span id=\"lkick\" class=\"pill\">-</span>\n"
@@ -295,7 +296,7 @@ const char web_page[] =
   "var logcur=-1;\n"
   "var errHist=[],errCursor=-1,errHover=-1;\n"
   "var ntpHist=[],ntpCursor=-1,ntpHover=-1;\n"
-  "var WEBVER='1d1cd452';\n"
+  "var WEBVER='db17442a';\n"
   "function $(i){return document.getElementById(i)}\n"
   "function v(i){return $(i).value}\n"
   "function t(i,x){var e=$(i);if(e.textContent!=x)e.textContent=x}\n"
@@ -588,7 +589,8 @@ const char web_page[] =
   " pumpErr();\n"
   " pumpNtp();\n"
   "\n"
-  " var L=d.loop,e=$('lstate');e.textContent=L.state;\n"
+  " var L=d.loop,e=$('lstate');\n"
+  " t('llock',L.state==='track'\?num(L.locked_s)+' s ('+hhmm(L.locked_s)+')':'not locked');e.textContent=L.state;\n"
   " e.className='pill '+(L.state=='track'\?'on':L.state=='hold'\?'bad':'off');\n"
   " t('lerr',num(L.err_us));t('lfilt',num(L.filt_us));t('lev',num(L.events)+' ('+L.missed+' missed)');\n"
   " t('ldrift',num(L.drift_ppb));\n"
@@ -738,4 +740,4 @@ const char web_setup[] =
 
 const uint32_t web_setup_len = (uint32_t)(sizeof(web_setup) - 1u);
 
-const char web_version[] = "1d1cd452";
+const char web_version[] = "db17442a";
