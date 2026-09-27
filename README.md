@@ -207,7 +207,7 @@ here, but any command works, from `curl` or from this console.
 |---|---|
 | `board/` | KiCad 7 project — schematic, PCB, gerbers, and a pcb2gcode setup for milling |
 | `Code/synchronizer/` | Pico W firmware. See [its README](Code/synchronizer/README.md) for build and bring-up. |
-| `CAD/` | FreeCAD models, parametric, plus their STLs. `WeightedCoilForm.FCStd` is the sense/drive coil holder, including the form the magnet wire is wound on. `WeightedElectromagnetHolder.FCStd` is the platform that holds the drive electromagnet itself. Both carry a ballast cup at the base for weighting the holder down (rocks, steel shot, cement, ...) so it stands still. |
+| `CAD/` | FreeCAD models, parametric, plus their STLs. See [its README](CAD/README.md) for what each one is. |
 | `Simulations/` | Qucs-S / ngspice models of the coil sensor and the coil pulser |
 
 ## Status
@@ -248,7 +248,8 @@ so a coil at one extreme sees it 4200 times an hour, not 8400.
 
 ## Licence
 
-The board carries **CC BY-SA 4.0** on its silkscreen; the full text is in
+The board carries **CC BY-SA 4.0** on its silkscreen, and the CAD models are
+under the same licence; the full text is in
 [`LICENSE-CC-BY-SA-4.0.txt`](LICENSE-CC-BY-SA-4.0.txt). The firmware sources
 each carry a zlib-style permissive notice, and the full text is in
 [`Code/synchronizer/LICENSE`](Code/synchronizer/LICENSE).
