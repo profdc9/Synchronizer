@@ -248,8 +248,9 @@ so a coil at one extreme sees it 4200 times an hour, not 8400.
 
 ## Licence
 
-The board carries **CC BY-SA 4.0** on its silkscreen. The firmware sources
-each carry a zlib-style permissive notice. There is no separate `LICENSE`
-file yet.
+The board carries **CC BY-SA 4.0** on its silkscreen; the full text is in
+[`LICENSE-CC-BY-SA-4.0.txt`](LICENSE-CC-BY-SA-4.0.txt). The firmware sources
+each carry a zlib-style permissive notice, and the full text is in
+[`Code/synchronizer/LICENSE`](Code/synchronizer/LICENSE).
 
 Daniel Marks
