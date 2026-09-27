@@ -561,13 +561,22 @@ static int kick_cmd(int args, tinycl_parameter *tp, void *v)
   return 1;
 }
 
+/* Good for confirming KICK trips in the right direction and releases - not
+   for tuning cfg.pulse_advance_width_us/pulse_retard_width_us against a real
+   discrepancy.  sched_err_ns is re-derived from ev->utc_ns every tracked
+   event, so a seeded value only lasts until the next event measures the
+   pendulum against NTP again - typically one swing - and overwrites it with
+   the real (near-zero) figure.  There is no way to hold an artificial error
+   in place long enough to see what a pulse width does to it; that has to be
+   judged from how the clock behaves over many real corrections instead. */
 static int forceerr_cmd(int args, tinycl_parameter *tp, void *v)
 {
   (void)args; (void)v;
   int64_t us = (int64_t)tp[0].ti.i;
   control_force_sched_err_ns(us * 1000ll);
   printf("uncorrected error forced to %lld us - KICK reacts on the next"
-         " tracked event\r\n", (long long)us);
+         " tracked event, but the real measurement overwrites this by the"
+         " event after that\r\n", (long long)us);
   return 1;
 }
 
@@ -1095,7 +1104,7 @@ static const tinycl_command tcmds[] =
                 {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "PTIME",    "advance_us retard_us - pulse placing",   ptime_cmd,    {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "KICK",     "min_swings threshold_pct - hysteresis params, picks direction itself", kick_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
-  { "FORCEERR", "us - test only: seed uncorrected error to trigger KICK", forceerr_cmd, {TINYCL_PARM_INT, TINYCL_PARM_END} },
+  { "FORCEERR", "us - test only: trip KICK; NTP overwrites it in ~1 event, not for tuning width", forceerr_cmd, {TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "CONTROL",  "y|n - close the loop",                control_cmd,  {TINYCL_PARM_BOOL, TINYCL_PARM_END} },
   { "BPH",      "beats_per_hour beats_per_swing",         bph_cmd,      {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },
   { "GEOMETRY", "events_per_swing drive_offset_ppt",      geometry_cmd, {TINYCL_PARM_INT, TINYCL_PARM_INT, TINYCL_PARM_END} },

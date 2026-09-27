@@ -142,22 +142,56 @@ R18 are unpopulated positions for damping the coils if you need it.
 | `/AMPLITUDE` | GPIO26 / ADC0 | envelope detector output |
 | `/OSC_SIGNAL` | GPIO27 / ADC1 | amplified tank waveform |
 
+## Physical setup
+
+<table>
+<tr>
+<td width="50%"><img src="pictures/clockpendulum.jpg" alt="The development clock"></td>
+<td width="50%"><img src="pictures/coilsbehindclock.jpg" alt="Both coil holders, wired to the board, standing behind the clock"></td>
+</tr>
+<tr>
+<td>The development clock — a 31-day mantel regulator. Neither coil touches
+it; both stand free behind the case, reaching through the back wall.</td>
+<td>The two coil holders assembled and wired to the board. Each stands on a
+3D-printed platform with a ballast cup at its base — filled here with
+cement — so it stays put on the shelf rather than picking up the pendulum's
+own vibration.</td>
+</tr>
+<tr>
+<td><img src="pictures/electromagnet.jpg" alt="The drive electromagnet on its mount"></td>
+<td><img src="pictures/sensecoil.jpg" alt="The sense coil on its winding form"></td>
+</tr>
+<tr>
+<td>The drive coil: a 50 mm × 35 mm, 500 N lifting electromagnet, 12 V at
+about 250 mA, on its holder.</td>
+<td>The sense coil, wound on its own form — the parallel resonant tank
+described above.</td>
+</tr>
+</table>
+
+Both holders are FreeCAD models, parametric in coil/magnet dimensions — see
+`CAD/` below.
+
 ## Repository layout
 
 | | |
 |---|---|
 | `board/` | KiCad 7 project — schematic, PCB, gerbers, and a pcb2gcode setup for milling |
 | `Code/synchronizer/` | Pico W firmware. See [its README](Code/synchronizer/README.md) for build and bring-up. |
-| `CAD/` | FreeCAD models of the coil form and a coil form with a PCB holder, plus an STL |
+| `CAD/` | FreeCAD models, parametric, plus their STLs. `WeightedCoilForm.FCStd` is the sense/drive coil holder, including the form the magnet wire is wound on. `WeightedElectromagnetHolder.FCStd` is the platform that holds the drive electromagnet itself. Both carry a ballast cup at the base for weighting the holder down (rocks, steel shot, cement, ...) so it stands still. |
 | `Simulations/` | Qucs-S / ngspice models of the coil sensor and the coil pulser |
 
 ## Status
 
-The board is built and the firmware compiles, but the loop has not yet run
-against a real clock. The one quantity it cannot derive is the **phase shift
-one drive pulse produces** — that is the loop gain, and the firmware has a
-`MEASURE` command to find it. Until it is measured, the loop will track and
-report but refuses to fire.
+The board is built, the firmware runs the loop against the real clock shown
+above, and it locks and holds it on time. Correction uses **KICK**: a
+one-directional bang-bang scheme, no up-front gain measurement needed — it
+fires a short pulse no more than once every few swings, only while the
+error is on the side of zero that direction corrects, and stops once it
+crosses back. An earlier design spent an accumulated phase error against a
+measured "price per pulse" (`MEASURE`/`AUTH`); that path has been removed —
+KICK needs no such calibration and has proven to be the simpler, working
+approach.
 
 Bring-up order, and the web interface, are in the
 [firmware README](Code/synchronizer/README.md).
