@@ -124,6 +124,12 @@ current runs through R6, a 10 Ω power resistor. D2 (UF4007) is the flyback
 clamp across the coil, and R22 with C10 snubs the switching node. R17 and
 R18 are unpopulated positions for damping the coils if you need it.
 
+**R6's job is damping the drive circuit's oscillations, not setting a
+current limit by design** — size it to the coil actually wound rather than
+assuming the populated value. A lower-resistance coil wants a smaller R6, and
+in many cases R6 can be 0 Ω outright; a higher-resistance coil can tolerate,
+and may need, more damping.
+
 > **A word of caution about R6.** The coil's DC resistance depends on what
 > you wind, and R6 is in series with it across 12 V. A pulse left on could
 > put several watts into that resistor. The firmware bounds every pulse
@@ -152,10 +158,11 @@ R18 are unpopulated positions for damping the coils if you need it.
 <tr>
 <td>The development clock — a 31-day mantel regulator. Neither coil touches
 it; both stand free behind the case, reaching through the back wall.</td>
-<td>The two coil holders assembled and wired to the board. Each stands on a
-3D-printed platform with a ballast cup at its base — filled here with
-cement — so it stays put on the shelf rather than picking up the pendulum's
-own vibration.</td>
+<td>The two coil holders assembled and wired to the board, placed at
+opposite extremes of the pendulum's swing — the recommended default
+geometry. Each stands on a 3D-printed platform with a ballast cup at its
+base — filled here with cement — so it stays put on the shelf rather than
+picking up the pendulum's own vibration.</td>
 </tr>
 <tr>
 <td><img src="pictures/electromagnet.jpg" alt="The drive electromagnet on its mount"></td>
@@ -171,6 +178,28 @@ described above.</td>
 
 Both holders are FreeCAD models, parametric in coil/magnet dimensions — see
 `CAD/` below.
+
+## The web interface
+
+The device serves its own dashboard — no app, no cloud account, nothing to
+install. These are from the clock above, running live.
+
+![Loop, clock, time, sense and drive](pictures/screenshot-webpage-top.png)
+
+At-a-glance status: the loop's lock state and uncorrected error, the clock's
+measured swing rate, network and NTP health, the sense detector, and the
+drive coil's per-direction pulse widths — all on one screen, live.
+
+![Error/correction history and the chime diagnostic](pictures/screenshot-webpage-2.png)
+
+The uncorrected error over time, with advance and retard pulses marked where
+they fired; the size of each NTP correction below it; and the chime
+diagnostic showing what the hands should currently read.
+
+![The console](pictures/screenshot-webpage-console.png)
+
+The same command line as the serial port, in the browser — `STATUS` shown
+here, but any command works, from `curl` or from this console.
 
 ## Repository layout
 
